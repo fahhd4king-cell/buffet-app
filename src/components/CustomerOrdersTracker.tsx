@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { Order, OrderStatus } from '../types';
 import { OrderChatModal } from './OrderChatModal';
+import { supabase } from '../lib/supabase';
 import { X, Clock, MessageSquare, CheckCircle2, ChevronRight, Sparkles, MapPin, Check, Lock, UserCheck } from 'lucide-react';
 
 interface CustomerOrdersTrackerProps {
@@ -17,6 +18,31 @@ export const CustomerOrdersTracker: React.FC<CustomerOrdersTrackerProps> = ({
 }) => {
   const { orders, customerUser, updateOrderStatus, setIsAuthModalOpen } = useApp();
   const [activeChatOrder, setActiveChatOrder] = useState<Order | null>(null);
+
+  // تفعيل التحديث الفوري لجلب الطلبات الجديدة بين الجوالات مباشرة
+  useEffect(() => {
+    if (!isOpen || !supabase) return;
+
+    const channel = supabase
+      .channel('public:orders')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'orders',
+        },
+        (payload) => {
+          // إعادة تحميل الصفحة لتحديث الطلبات فوراً عند إرسال طلب جديد من أي جوال آخر
+          window.location.reload();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase?.removeChannel(channel);
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
