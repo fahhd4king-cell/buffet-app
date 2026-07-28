@@ -33,7 +33,7 @@ import {
 import { soundManager } from '../utils/audio';
 import { calculateDistanceMeters } from '../utils/location';
 import { hashPassword, verifyPassword } from '../utils/security';
-import { sendPushNotification, requestNotificationPermission } from '../utils/notifications';
+import { sendPushNotification } from '../utils/notifications';
 
 interface AppContextType {
   role: Role;
@@ -116,10 +116,10 @@ interface AppContextType {
     paymentStatus?: PaymentStatus,
     paymentReference?: string,
     paymentGateway?: string
-  ) => string;
-  updateOrderStatus: (orderId: string, newStatus: OrderStatus) => void;
-  toggleOrderPaymentStatus: (orderId: string, targetStatus?: PaymentStatus) => void;
-  addChatMessage: (orderId: string, text: string, sender: 'customer' | 'staff') => void;
+  ) => Promise<string>;
+  updateOrderStatus: (orderId: string, newStatus: OrderStatus) => Promise<void>;
+  toggleOrderPaymentStatus: (orderId: string, targetStatus?: PaymentStatus) => Promise<void>;
+  addChatMessage: (orderId: string, text: string, sender: 'customer' | 'staff') => Promise<void>;
 
   // Payment Gateway Configuration
   paymentGatewayConfig: PaymentGatewayConfig;
@@ -147,17 +147,6 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const LOCAL_STORAGE_KEY_MENU = 'buffet_app_menu_v1';
-const LOCAL_STORAGE_KEY_ORDERS = 'buffet_app_orders_v1';
-const LOCAL_STORAGE_KEY_STAFF = 'buffet_app_staff_v1';
-const LOCAL_STORAGE_KEY_STATUS = 'buffet_app_status_v1';
-const LOCAL_STORAGE_KEY_LOCATION = 'buffet_app_location_v1';
-const LOCAL_STORAGE_KEY_ATTENDANCE = 'buffet_app_attendance_v1';
-const LOCAL_STORAGE_KEY_CURRENT_STAFF = 'buffet_app_current_staff_v1';
-const LOCAL_STORAGE_KEY_OPTION_GROUPS = 'buffet_app_option_groups_v1';
-const LOCAL_STORAGE_KEY_GATEWAY_CONFIG = 'buffet_app_gateway_config_v1';
-const LOCAL_STORAGE_KEY_CUSTOMER_USER = 'buffet_app_customer_user_v1';
-const LOCAL_STORAGE_KEY_ALL_CUSTOMERS = 'buffet_app_all_customers_v1';
 
 const DEFAULT_GATEWAY_CONFIG: PaymentGatewayConfig = {
   activeGateway: 'simulated',
@@ -175,8 +164,8 @@ const DEFAULT_GATEWAY_CONFIG: PaymentGatewayConfig = {
 
 const DEFAULT_BUFFET_STATUS: BuffetStatus = {
   isOpen: true,
-  closureReason: 'انتهى وقت الدوام الرسمي',
-  reopenTime: '6:00 صباحاً',
+  closureReason: 'ط§ظ†طھظ‡ظ‰ ظˆظ‚طھ ط§ظ„ط¯ظˆط§ظ… ط§ظ„ط±ط³ظ…ظٹ',
+  reopenTime: '6:00 طµط¨ط§ط­ط§ظ‹',
   autoScheduleEnabled: false,
   workingHours: {
     openHour: '06:00',
@@ -184,152 +173,56 @@ const DEFAULT_BUFFET_STATUS: BuffetStatus = {
   },
 };
 
+const mapOrder = (row: any): Order => ({
+  id: row.order_number,
+  userId: row.user_id ?? undefined,
+  customerName: row.customer_name ?? 'عميل البوفيه',
+  customerOffice: row.customer_office ?? '',
+  items: row.items ?? [], totalPrice: Number(row.total_price ?? 0),
+  status: row.status ?? 'received', createdAt: row.created_at, updatedAt: row.updated_at,
+  notes: row.notes ?? '', chatMessages: row.chat_messages ?? [],
+  paymentMethod: row.payment_method ?? 'cash', paymentStatus: row.payment_status ?? 'unpaid',
+  paymentReference: row.payment_reference ?? undefined, paymentGateway: row.payment_gateway ?? undefined,
+});
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [role, setRole] = useState<Role>('welcome');
   const [selectedCategory, setSelectedCategory] = useState<CategoryId | 'all'>('all');
-  const [activeBranch, setActiveBranch] = useState<string>('بوفيه فادي');
+  const [activeBranch, setActiveBranch] = useState<string>('ط¨ظˆظپظٹظ‡ ظپط§ط¯ظٹ');
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' } | null>(null);
 
-  // Customer Account State
-  const [customerUser, setCustomerUser] = useState<AppUser | null>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_CUSTOMER_USER);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
-  // Unread orders for staff
-  const [unreadStaffOrdersCount, setUnreadStaffOrdersCount] = useState<number>(0);
-
-  // Auth & Modals State
+  // Cloud is the source of truth; no browser persistence is used.
+  const [customerUser, setCustomerUser] = useState<AppUser | null>(null);
+  const [unreadStaffOrdersCount, setUnreadStaffOrdersCount] = useState(0);
   const [authUser, setAuthUser] = useState<User | null>(null);
-  const [userId, setUserId] = useState<string>(() => {
-    try {
-      const savedUser = localStorage.getItem(LOCAL_STORAGE_KEY_CUSTOMER_USER);
-      if (savedUser) {
-        const parsed = JSON.parse(savedUser);
-        if (parsed?.id) return parsed.id;
-      }
-    } catch (e) {
-      console.error(e);
-    }
-    return '';
-  });
+  const [userId, setUserId] = useState('');
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-
-  // Audio trigger tracking to prevent duplicates
   const processedOrderIdsRef = useRef<Set<string>>(new Set());
-
-  // Initialize Menu
-  const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_MENU);
-      if (saved) return JSON.parse(saved);
-      return INITIAL_MENU_ITEMS;
-    } catch {
-      return INITIAL_MENU_ITEMS;
-    }
-  });
-
-  // Initialize Orders - Clean slate for live production
-  const [orders, setOrders] = useState<Order[]>(() => {
-    try {
-      localStorage.removeItem(LOCAL_STORAGE_KEY_ORDERS);
-      return [];
-    } catch {
-      return [];
-    }
-  });
-
-  // Initialize Staff
-  const [staff, setStaff] = useState<StaffMember[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_STAFF);
-      return saved ? JSON.parse(saved) : INITIAL_STAFF;
-    } catch {
-      return INITIAL_STAFF;
-    }
-  });
-
-  // Initialize Buffet Status
-  const [buffetStatus, setBuffetStatus] = useState<BuffetStatus>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_STATUS);
-      if (saved) return JSON.parse(saved);
-      return DEFAULT_BUFFET_STATUS;
-    } catch {
-      return DEFAULT_BUFFET_STATUS;
-    }
-  });
-
-  // Initialize Current Logged-in Staff
-  const [currentStaff, setCurrentStaff] = useState<StaffMember | null>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_CURRENT_STAFF);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-
-  // Initialize Buffet Location
-  const [buffetLocation, setBuffetLocation] = useState<BuffetLocation>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_LOCATION);
-      return saved ? JSON.parse(saved) : INITIAL_BUFFET_LOCATION;
-    } catch {
-      return INITIAL_BUFFET_LOCATION;
-    }
-  });
-
-  // Initialize Attendance Records
-  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_ATTENDANCE);
-      return saved ? JSON.parse(saved) : INITIAL_ATTENDANCE;
-    } catch {
-      return INITIAL_ATTENDANCE;
-    }
-  });
-
-  // Initialize Customization Option Groups
-  const [optionGroups, setOptionGroups] = useState<CustomizationGroup[]>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_OPTION_GROUPS);
-      return saved ? JSON.parse(saved) : INITIAL_OPTION_GROUPS;
-    } catch {
-      return INITIAL_OPTION_GROUPS;
-    }
-  });
-
-  // Initialize Payment Gateway Config
-  const [paymentGatewayConfig, setPaymentGatewayConfig] = useState<PaymentGatewayConfig>(() => {
-    try {
-      const saved = localStorage.getItem(LOCAL_STORAGE_KEY_GATEWAY_CONFIG);
-      return saved ? { ...DEFAULT_GATEWAY_CONFIG, ...JSON.parse(saved) } : DEFAULT_GATEWAY_CONFIG;
-    } catch {
-      return DEFAULT_GATEWAY_CONFIG;
-    }
-  });
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [buffetStatus, setBuffetStatus] = useState<BuffetStatus>(DEFAULT_BUFFET_STATUS);
+  const [currentStaff, setCurrentStaff] = useState<StaffMember | null>(null);
+  const [buffetLocation, setBuffetLocation] = useState<BuffetLocation>(INITIAL_BUFFET_LOCATION);
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [optionGroups, setOptionGroups] = useState<CustomizationGroup[]>([]);
+  const [paymentGatewayConfig, setPaymentGatewayConfig] = useState<PaymentGatewayConfig>(DEFAULT_GATEWAY_CONFIG);
 
   // Supabase Auth Listener
   useEffect(() => {
     getCurrentUserId().then((id) => setUserId(id || ''));
 
     if (isSupabaseConfigured() && supabase) {
-      supabase.auth.getUser().then(({ data }) => {
+      supabase!.auth.getUser().then(({ data }) => {
         if (data?.user) {
           setAuthUser(data.user);
           setUserId(data.user.id);
         }
       });
 
-      const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const { data: authListener } = supabase!.auth.onAuthStateChange((_event, session) => {
         if (session?.user) {
           setAuthUser(session.user);
           setUserId(session.user.id);
@@ -359,8 +252,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       .then(({ data, error }) => {
         if (!error && data && data.length > 0 && isMounted) {
           const mapped: Order[] = data.map((d: any) => ({
-            id: d.id || d.order_number,
-            customerName: d.customer_name || 'عميل البوفيه',
+            id: d.order_number,
+            customerName: d.customer_name || 'ط¹ظ…ظٹظ„ ط§ظ„ط¨ظˆظپظٹظ‡',
             customerOffice: d.customer_office || '',
             items: d.items || [],
             totalPrice: Number(d.total_price) || 0,
@@ -438,8 +331,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           if (payload.eventType === 'INSERT') {
             const row: any = payload.new;
             const newOrder: Order = {
-              id: row.id || row.order_number,
-              customerName: row.customer_name || 'عميل البوفيه',
+              id: row.order_number,
+              customerName: row.customer_name || 'ط¹ظ…ظٹظ„ ط§ظ„ط¨ظˆظپظٹظ‡',
               customerOffice: row.customer_office || '',
               items: row.items || [],
               totalPrice: Number(row.total_price) || 0,
@@ -463,11 +356,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             if (!processedOrderIdsRef.current.has(newOrder.id)) {
               processedOrderIdsRef.current.add(newOrder.id);
               soundManager.playNewOrderSound();
-              showToastMessage(`وصل طلب جديد ${newOrder.id} (${newOrder.customerName})! 🔔`, 'success');
+              showToastMessage(`ظˆطµظ„ ط·ظ„ط¨ ط¬ط¯ظٹط¯ ${newOrder.id} (${newOrder.customerName})! ًں””`, 'success');
             }
           } else if (payload.eventType === 'UPDATE') {
             const row: any = payload.new;
-            const updatedId = row.id || row.order_number;
+            const updatedId = row.order_number;
             const updatedStatus = row.status as OrderStatus;
 
             setOrders((prev) =>
@@ -477,7 +370,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   if (o.status !== 'ready' && updatedStatus === 'ready') {
                     soundManager.playOrderReadySound();
                     confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-                    showToastMessage(`طلبك ${updatedId} أصبح جاهزاً الآن من البوفيه! 🔔`, 'success');
+                    showToastMessage(`ط·ظ„ط¨ظƒ ${updatedId} ط£طµط¨ط­ ط¬ط§ظ‡ط²ط§ظ‹ ط§ظ„ط¢ظ† ظ…ظ† ط§ظ„ط¨ظˆظپظٹظ‡! ًں””`, 'success');
                   }
                   return {
                     ...o,
@@ -490,6 +383,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 return o;
               })
             );
+          } else if (payload.eventType === 'DELETE') {
+            const deletedId = (payload.old as any).order_number;
+            setOrders((prev) => prev.filter((order) => order.id !== deletedId));
           }
         }
       )
@@ -566,42 +462,61 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
   }, []);
 
-  // Save to LocalStorage as secondary cache
+  // Cloud-backed auxiliary state.  These table names intentionally match the
+  // domain names used by the context; enable them in the Realtime publication.
   useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY_MENU, JSON.stringify(menuItems));
-  }, [menuItems]);
+    if (!supabase || !isSupabaseConfigured()) return;
 
-  useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY_ORDERS, JSON.stringify(orders));
-  }, [orders]);
+    const load = async () => {
+      const [groups, location, attendance, gateway] = await Promise.all([
+        supabase!.from('option_groups').select('*'),
+        supabase!.from('buffet_location').select('*').eq('id', 'main').maybeSingle(),
+        supabase!.from('attendance_records').select('*').order('date', { ascending: false }),
+        supabase!.from('payment_gateway_config').select('config').eq('id', 'main').maybeSingle(),
+      ]);
+      if (!groups.error) setOptionGroups((groups.data ?? []) as CustomizationGroup[]);
+      if (!location.error && location.data) setBuffetLocation(location.data as BuffetLocation);
+      if (!attendance.error) setAttendanceRecords((attendance.data ?? []) as AttendanceRecord[]);
+      if (!gateway.error && gateway.data?.config) setPaymentGatewayConfig(gateway.data.config as PaymentGatewayConfig);
+    };
+    void load();
 
-  useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY_STAFF, JSON.stringify(staff));
-  }, [staff]);
+    const channel = supabase
+      .channel('buffet-auxiliary-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'option_groups' }, (payload) => {
+        if (payload.eventType === 'DELETE') {
+          setOptionGroups((current) => current.filter((group) => group.id !== payload.old.id));
+          return;
+        }
+        const group = payload.new as CustomizationGroup;
+        setOptionGroups((current) => {
+          const found = current.findIndex((item) => item.id === group.id);
+          if (found < 0) return [...current, group];
+          const next = [...current]; next[found] = group; return next;
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'buffet_location' }, (payload) => {
+        if (payload.eventType !== 'DELETE') setBuffetLocation(payload.new as BuffetLocation);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_records' }, (payload) => {
+        if (payload.eventType === 'DELETE') {
+          setAttendanceRecords((current) => current.filter((record) => record.id !== payload.old.id));
+          return;
+        }
+        const record = payload.new as AttendanceRecord;
+        setAttendanceRecords((current) => {
+          const found = current.findIndex((item) => item.id === record.id);
+          if (found < 0) return [record, ...current];
+          const next = [...current]; next[found] = record; return next;
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_gateway_config' }, (payload) => {
+        if (payload.eventType !== 'DELETE' && payload.new.config) setPaymentGatewayConfig(payload.new.config as PaymentGatewayConfig);
+      })
+      .subscribe();
 
-  useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY_STATUS, JSON.stringify(buffetStatus));
-  }, [buffetStatus]);
-
-  useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY_LOCATION, JSON.stringify(buffetLocation));
-  }, [buffetLocation]);
-
-  useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY_ATTENDANCE, JSON.stringify(attendanceRecords));
-  }, [attendanceRecords]);
-
-  useEffect(() => {
-    localStorage.setItem(LOCAL_STORAGE_KEY_OPTION_GROUPS, JSON.stringify(optionGroups));
-  }, [optionGroups]);
-
-  useEffect(() => {
-    if (currentStaff) {
-      localStorage.setItem(LOCAL_STORAGE_KEY_CURRENT_STAFF, JSON.stringify(currentStaff));
-    } else {
-      localStorage.removeItem(LOCAL_STORAGE_KEY_CURRENT_STAFF);
-    }
-  }, [currentStaff]);
+    return () => { void supabase!.removeChannel(channel); };
+  }, []);
 
   const showToastMessage = (message: string, type: 'success' | 'info' | 'warning' = 'info') => {
     setToast({ message, type });
@@ -623,31 +538,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const cleanName = name.trim();
 
     if (!cleanName || !cleanUsername || !password) {
-      return { success: false, message: 'يرجى إدخال جميع البيانات المطلوبة' };
+      return { success: false, message: 'ظٹط±ط¬ظ‰ ط¥ط¯ط®ط§ظ„ ط¬ظ…ظٹط¹ ط§ظ„ط¨ظٹط§ظ†ط§طھ ط§ظ„ظ…ط·ظ„ظˆط¨ط©' };
     }
 
     let isUsernameTaken = false;
 
     // Check Supabase if configured
     if (isSupabaseConfigured() && supabase) {
-      const { data } = await supabase.from('app_users').select('id').eq('username', cleanUsername).maybeSingle();
+      const { data } = await supabase!.from('app_users').select('id').eq('username', cleanUsername).maybeSingle();
       if (data) isUsernameTaken = true;
     }
 
-    // Check LocalStorage fallback
-    if (!isUsernameTaken) {
-      try {
-        const savedUsers: AppUser[] = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY_ALL_CUSTOMERS) || '[]');
-        if (savedUsers.some((u) => u.username.toLowerCase() === cleanUsername)) {
-          isUsernameTaken = true;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
     if (isUsernameTaken) {
-      return { success: false, message: 'اسم المستخدم مستخدم مسبقاً، يرجى اختيار اسم آخر ❌' };
+      return { success: false, message: 'ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ظ…ط³طھط®ط¯ظ… ظ…ط³ط¨ظ‚ط§ظ‹طŒ ظٹط±ط¬ظ‰ ط§ط®طھظٹط§ط± ط§ط³ظ… ط¢ط®ط± â‌Œ' };
     }
 
     // Securely hash password
@@ -666,7 +569,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     // Save to Supabase
     if (isSupabaseConfigured() && supabase) {
-      supabase.from('app_users').insert({
+      supabase!.from('app_users').insert({
         id: newUser.id,
         name: newUser.name,
         username: newUser.username,
@@ -679,21 +582,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
     }
 
-    // Save to LocalStorage
-    try {
-      const savedUsers: AppUser[] = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY_ALL_CUSTOMERS) || '[]');
-      savedUsers.push(newUser);
-      localStorage.setItem(LOCAL_STORAGE_KEY_ALL_CUSTOMERS, JSON.stringify(savedUsers));
-      localStorage.setItem(LOCAL_STORAGE_KEY_CUSTOMER_USER, JSON.stringify(newUser));
-    } catch (e) {
-      console.error(e);
-    }
-
     setCustomerUser(newUser);
     setUserId(newUser.id);
-    showToastMessage(`أهلاً بك يا ${cleanName}! تم إنشاء الحساب بنجاح ✨`, 'success');
+    showToastMessage(`ط£ظ‡ظ„ط§ظ‹ ط¨ظƒ ظٹط§ ${cleanName}! طھظ… ط¥ظ†ط´ط§ط، ط§ظ„ط­ط³ط§ط¨ ط¨ظ†ط¬ط§ط­ âœ¨`, 'success');
 
-    return { success: true, message: 'تم إنشاء الحساب بنجاح! ✨' };
+    return { success: true, message: 'طھظ… ط¥ظ†ط´ط§ط، ط§ظ„ط­ط³ط§ط¨ ط¨ظ†ط¬ط§ط­! âœ¨' };
   };
 
   // Customer Account Login
@@ -707,13 +600,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const cleanUsername = username.trim().toLowerCase();
 
     if (!cleanUsername || !password) {
-      return { success: false, message: 'يرجى إدخال اسم المستخدم وكلمة المرور' };
+      return { success: false, message: 'ظٹط±ط¬ظ‰ ط¥ط¯ط®ط§ظ„ ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ظˆظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط±' };
     }
 
     let foundUser: AppUser | null = null;
 
     if (isSupabaseConfigured() && supabase) {
-      const { data } = await supabase.from('app_users').select('*').eq('username', cleanUsername).maybeSingle();
+      const { data } = await supabase!.from('app_users').select('*').eq('username', cleanUsername).maybeSingle();
       if (data) {
         foundUser = {
           id: data.id,
@@ -728,44 +621,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     if (!foundUser) {
-      try {
-        const savedUsers: AppUser[] = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY_ALL_CUSTOMERS) || '[]');
-        const localMatch = savedUsers.find((u) => u.username.toLowerCase() === cleanUsername);
-        if (localMatch) foundUser = localMatch;
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    if (!foundUser) {
-      return { success: false, message: 'اسم المستخدم أو كلمة المرور غير صحيحة ❌' };
+      return { success: false, message: 'ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ط£ظˆ ظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط± ط؛ظٹط± طµط­ظٹط­ط© â‌Œ' };
     }
 
     if (foundUser.status === 'inactive') {
-      return { success: false, message: 'الحساب معطل حالياً، يرجى التواصل مع الإدارة.' };
+      return { success: false, message: 'ط§ظ„ط­ط³ط§ط¨ ظ…ط¹ط·ظ„ ط­ط§ظ„ظٹط§ظ‹طŒ ظٹط±ط¬ظ‰ ط§ظ„طھظˆط§طµظ„ ظ…ط¹ ط§ظ„ط¥ط¯ط§ط±ط©.' };
     }
 
     const isValid = await verifyPassword(password, foundUser.passwordHash);
     if (!isValid) {
-      return { success: false, message: 'اسم المستخدم أو كلمة المرور غير صحيحة ❌' };
+      return { success: false, message: 'ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ط£ظˆ ظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط± ط؛ظٹط± طµط­ظٹط­ط© â‌Œ' };
     }
 
     setCustomerUser(foundUser);
     setUserId(foundUser.id);
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_CUSTOMER_USER, JSON.stringify(foundUser));
-    } catch (e) {
-      console.error(e);
-    }
-    showToastMessage(`مرحباً بعودتك يا ${foundUser.name}! 👋`, 'success');
+    showToastMessage(`ظ…ط±ط­ط¨ط§ظ‹ ط¨ط¹ظˆط¯طھظƒ ظٹط§ ${foundUser.name}! ًں‘‹`, 'success');
 
-    return { success: true, message: 'تم تسجيل الدخول بنجاح! 🎉' };
+    return { success: true, message: 'طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط¯ط®ظˆظ„ ط¨ظ†ط¬ط§ط­! ًںژ‰' };
   };
 
   const logoutCustomerUser = () => {
     setCustomerUser(null);
-    localStorage.removeItem(LOCAL_STORAGE_KEY_CUSTOMER_USER);
-    showToastMessage('تم تسجيل الخروج بنجاح 👋', 'info');
+    showToastMessage('طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط®ط±ظˆط¬ ط¨ظ†ط¬ط§ط­ ًں‘‹', 'info');
   };
 
   const markStaffOrdersAsRead = () => {
@@ -776,7 +653,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const next = !soundEnabled;
     setSoundEnabled(next);
     soundManager.enabled = next;
-    showToastMessage(next ? 'تم تفعيل التنبيهات الصوتية 🔔' : 'تم كتم التنبيهات الصوتية 🔕', 'info');
+    showToastMessage(next ? 'طھظ… طھظپط¹ظٹظ„ ط§ظ„طھظ†ط¨ظٹظ‡ط§طھ ط§ظ„طµظˆطھظٹط© ًں””' : 'طھظ… ظƒطھظ… ط§ظ„طھظ†ط¨ظٹظ‡ط§طھ ط§ظ„طµظˆطھظٹط© ًں”•', 'info');
   };
 
   // Option Groups CRUD Handlers
@@ -787,13 +664,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     const updated = [...optionGroups, newGroup];
     setOptionGroups(updated);
-    showToastMessage(`تمت إضافة مجموعة الخيارات "${newGroup.name}" بنجاح ✨`, 'success');
+    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ظ…ط¬ظ…ظˆط¹ط© ط§ظ„ط®ظٹط§ط±ط§طھ "${newGroup.name}" ط¨ظ†ط¬ط§ط­ âœ¨`, 'success');
   };
 
   const updateOptionGroup = (group: CustomizationGroup) => {
     const updated = optionGroups.map((g) => (g.id === group.id ? group : g));
     setOptionGroups(updated);
-    showToastMessage(`تم تحديث مجموعة "${group.name}" بنجاح ✏️`, 'success');
+    showToastMessage(`طھظ… طھط­ط¯ظٹط« ظ…ط¬ظ…ظˆط¹ط© "${group.name}" ط¨ظ†ط¬ط§ط­ âœڈï¸ڈ`, 'success');
   };
 
   const deleteOptionGroup = (id: string) => {
@@ -811,7 +688,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return item;
     });
     setMenuItems(updatedMenuItems);
-    showToastMessage(`تم حذف مجموعة الخيارات "${groupName || ''}" بنجاح 🗑️`, 'info');
+    showToastMessage(`طھظ… ط­ط°ظپ ظ…ط¬ظ…ظˆط¹ط© ط§ظ„ط®ظٹط§ط±ط§طھ "${groupName || ''}" ط¨ظ†ط¬ط§ط­ ًں—‘ï¸ڈ`, 'info');
   };
 
   const toggleOptionGroupStatus = (id: string) => {
@@ -837,7 +714,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return g;
     });
     setOptionGroups(updated);
-    showToastMessage(`تمت إضافة خيار "${newOpt.name}" بنجاح ➕`, 'success');
+    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ط®ظٹط§ط± "${newOpt.name}" ط¨ظ†ط¬ط§ط­ â‍•`, 'success');
   };
 
   const updateOptionInGroup = (groupId: string, option: OptionItem) => {
@@ -848,7 +725,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return g;
     });
     setOptionGroups(updated);
-    showToastMessage(`تم تحديث الخيار "${option.name}" بنجاح ✏️`, 'success');
+    showToastMessage(`طھظ… طھط­ط¯ظٹط« ط§ظ„ط®ظٹط§ط± "${option.name}" ط¨ظ†ط¬ط§ط­ âœڈï¸ڈ`, 'success');
   };
 
   const deleteOptionFromGroup = (groupId: string, optionId: string) => {
@@ -859,7 +736,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return g;
     });
     setOptionGroups(updated);
-    showToastMessage('تم حذف الخيار بنجاح 🗑️', 'info');
+    showToastMessage('طھظ… ط­ط°ظپ ط§ظ„ط®ظٹط§ط± ط¨ظ†ط¬ط§ط­ ًں—‘ï¸ڈ', 'info');
   };
 
   const toggleOptionAvailability = (groupId: string, optionId: string) => {
@@ -913,27 +790,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     );
     if (found) {
       if (found.status === 'inactive') {
-        showToastMessage('حساب هذا الموظف غير نشط حالياً، يرجى مراجعة إدارة البوفيه.', 'warning');
+        showToastMessage('ط­ط³ط§ط¨ ظ‡ط°ط§ ط§ظ„ظ…ظˆط¸ظپ ط؛ظٹط± ظ†ط´ط· ط­ط§ظ„ظٹط§ظ‹طŒ ظٹط±ط¬ظ‰ ظ…ط±ط§ط¬ط¹ط© ط¥ط¯ط§ط±ط© ط§ظ„ط¨ظˆظپظٹظ‡.', 'warning');
         return false;
       }
       setCurrentStaff(found);
-      const roleTitle = found.role || 'مشرف البوفيه';
-      showToastMessage(`مرحباً بك يا ${found.name} (${roleTitle}) 👋`, 'success');
+      const roleTitle = found.role || 'ظ…ط´ط±ظپ ط§ظ„ط¨ظˆظپظٹظ‡';
+      showToastMessage(`ظ…ط±ط­ط¨ط§ظ‹ ط¨ظƒ ظٹط§ ${found.name} (${roleTitle}) ًں‘‹`, 'success');
       return true;
     }
-    showToastMessage('اسم المستخدم أو كلمة المرور غير صحيحة ❌', 'warning');
+    showToastMessage('ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ط£ظˆ ظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط± ط؛ظٹط± طµط­ظٹط­ط© â‌Œ', 'warning');
     return false;
   };
 
   const logoutStaff = () => {
     setCurrentStaff(null);
-    showToastMessage('تم تسجيل خروج الموظف 👋', 'info');
+    showToastMessage('طھظ… طھط³ط¬ظٹظ„ ط®ط±ظˆط¬ ط§ظ„ظ…ظˆط¸ظپ ًں‘‹', 'info');
   };
 
   // GPS & Attendance
   const updateBuffetLocation = (loc: BuffetLocation) => {
     setBuffetLocation(loc);
-    showToastMessage('تم تحديث موقع ونطاق البوفيه بنجاح 📍', 'success');
+    showToastMessage('طھظ… طھط­ط¯ظٹط« ظ…ظˆظ‚ط¹ ظˆظ†ط·ط§ظ‚ ط§ظ„ط¨ظˆظپظٹظ‡ ط¨ظ†ط¬ط§ط­ ًں“چ', 'success');
   };
 
   const clockInStaff = async (
@@ -943,7 +820,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   ): Promise<{ success: boolean; message: string; distance: number }> => {
     const distance = calculateDistanceMeters(lat, lng, buffetLocation.lat, buffetLocation.lng);
     if (distance > buffetLocation.allowedRadiusMeters) {
-      const errorMsg = 'يجب أن تكون داخل البوفيه لتسجيل الحضور';
+      const errorMsg = 'ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط¯ط§ط®ظ„ ط§ظ„ط¨ظˆظپظٹظ‡ ظ„طھط³ط¬ظٹظ„ ط§ظ„ط­ط¶ظˆط±';
       showToastMessage(errorMsg, 'warning');
       return { success: false, message: errorMsg, distance };
     }
@@ -955,7 +832,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newRecord: AttendanceRecord = {
       id: `att_${Date.now()}`,
       staffId,
-      staffName: targetStaff ? targetStaff.name : 'موظف البوفيه',
+      staffName: targetStaff ? targetStaff.name : 'ظ…ظˆط¸ظپ ط§ظ„ط¨ظˆظپظٹظ‡',
       date: todayStr,
       checkInTime: timeStr,
       status: 'present',
@@ -964,7 +841,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     setAttendanceRecords((prev) => [newRecord, ...prev]);
-    const successMsg = `تم تسجيل الحضور بنجاح الساعة ${timeStr} 📍 (${distance} متر من البوفيه)`;
+    const successMsg = `طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط­ط¶ظˆط± ط¨ظ†ط¬ط§ط­ ط§ظ„ط³ط§ط¹ط© ${timeStr} ًں“چ (${distance} ظ…طھط± ظ…ظ† ط§ظ„ط¨ظˆظپظٹظ‡)`;
     showToastMessage(successMsg, 'success');
     return { success: true, message: successMsg, distance };
   };
@@ -976,7 +853,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   ): Promise<{ success: boolean; message: string; distance: number }> => {
     const distance = calculateDistanceMeters(lat, lng, buffetLocation.lat, buffetLocation.lng);
     if (distance > buffetLocation.allowedRadiusMeters) {
-      const errorMsg = 'يجب أن تكون داخل البوفيه لتسجيل الانصراف';
+      const errorMsg = 'ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط¯ط§ط®ظ„ ط§ظ„ط¨ظˆظپظٹظ‡ ظ„طھط³ط¬ظٹظ„ ط§ظ„ط§ظ†طµط±ط§ظپ';
       showToastMessage(errorMsg, 'warning');
       return { success: false, message: errorMsg, distance };
     }
@@ -993,7 +870,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             ...rec,
             checkOutTime: timeStr,
             status: 'completed' as const,
-            workingHours: '8 ساعات',
+            workingHours: '8 ط³ط§ط¹ط§طھ',
           };
         }
         return rec;
@@ -1003,9 +880,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         next.unshift({
           id: `att_${Date.now()}`,
           staffId,
-          staffName: targetStaff ? targetStaff.name : 'مشرف البوفيه',
+          staffName: targetStaff ? targetStaff.name : 'ظ…ط´ط±ظپ ط§ظ„ط¨ظˆظپظٹظ‡',
           date: todayStr,
-          checkInTime: 'غير مسجل',
+          checkInTime: 'ط؛ظٹط± ظ…ط³ط¬ظ„',
           checkOutTime: timeStr,
           status: 'completed',
           distanceFromBuffetMeters: distance,
@@ -1014,7 +891,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return next;
     });
 
-    const successMsg = `تم تسجيل الانصراف بنجاح الساعة ${timeStr} 📍`;
+    const successMsg = `طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط§ظ†طµط±ط§ظپ ط¨ظ†ط¬ط§ط­ ط§ظ„ط³ط§ط¹ط© ${timeStr} ًں“چ`;
     showToastMessage(successMsg, 'success');
     return { success: true, message: successMsg, distance };
   };
@@ -1045,9 +922,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     if (isOpen) {
-      showToastMessage('تم فتح البوفيه وتفعيل استقبال الطلبات 🟢', 'success');
+      showToastMessage('طھظ… ظپطھط­ ط§ظ„ط¨ظˆظپظٹظ‡ ظˆطھظپط¹ظٹظ„ ط§ط³طھظ‚ط¨ط§ظ„ ط§ظ„ط·ظ„ط¨ط§طھ ًںں¢', 'success');
     } else {
-      showToastMessage('تم إغلاق البوفيه وتعطيل إرسال الطلبات الجديدة 🔴', 'warning');
+      showToastMessage('طھظ… ط¥ط؛ظ„ط§ظ‚ ط§ظ„ط¨ظˆظپظٹظ‡ ظˆطھط¹ط·ظٹظ„ ط¥ط±ط³ط§ظ„ ط§ظ„ط·ظ„ط¨ط§طھ ط§ظ„ط¬ط¯ظٹط¯ط© ًں”´', 'warning');
     }
   };
 
@@ -1073,7 +950,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage('تم حفظ إعدادات مواعيد وساعات العمل التلقائية ⏰', 'info');
+    showToastMessage('طھظ… ط­ظپط¸ ط¥ط¹ط¯ط§ط¯ط§طھ ظ…ظˆط§ط¹ظٹط¯ ظˆط³ط§ط¹ط§طھ ط§ظ„ط¹ظ…ظ„ ط§ظ„طھظ„ظ‚ط§ط¦ظٹط© âڈ°', 'info');
   };
 
   // Cart logic
@@ -1092,7 +969,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       return [...prev, newItem];
     });
-    showToastMessage(`تمت إضافة "${newItem.name}" إلى السلة 🛒`, 'success');
+    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© "${newItem.name}" ط¥ظ„ظ‰ ط§ظ„ط³ظ„ط© ًں›’`, 'success');
   };
 
   const removeFromCart = (index: number) => {
@@ -1115,229 +992,65 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
 
-  const updatePaymentGatewayConfig = (newConfig: PaymentGatewayConfig) => {
+  const updatePaymentGatewayConfig = async (newConfig: PaymentGatewayConfig) => {
+    if (!supabase) return;
+    const { error } = await supabase!.from('payment_gateway_config').upsert({ id: 'main', config: newConfig, updated_at: new Date().toISOString() });
+    if (error) { console.error('Error saving payment config:', error); showToastMessage('تعذر حفظ إعدادات الدفع.', 'warning'); return; }
     setPaymentGatewayConfig(newConfig);
-    try {
-      localStorage.setItem(LOCAL_STORAGE_KEY_GATEWAY_CONFIG, JSON.stringify(newConfig));
-    } catch (e) {
-      console.error(e);
-    }
-    showToastMessage('تم حفظ إعدادات بوابة الدفع الإلكتروني بنجاح ⚙️💳', 'success');
+    showToastMessage('تم حفظ إعدادات الدفع بنجاح.', 'success');
   };
 
-  // Place Order
-  const placeOrder = (
-    customerName: string,
-    customerOffice: string,
-    paymentMethod: PaymentMethod,
-    notes?: string,
-    paymentStatus?: PaymentStatus,
-    paymentReference?: string,
-    paymentGateway?: string
-  ): string => {
-    if (!buffetStatus.isOpen) {
-      showToastMessage(`عذراً، البوفيه مغلق حالياً (${buffetStatus.closureReason || 'انتهى وقت الدوام'}).`, 'warning');
-      return '';
-    }
-
-    const orderNumber = `#${Math.floor(1000 + Math.random() * 9000)}`;
-    const calculatedPaymentStatus: PaymentStatus = paymentStatus || (paymentMethod === 'cash' ? 'unpaid' : 'paid');
-
-    let defaultGatewayName = paymentGateway;
-    if (!defaultGatewayName) {
-      if (paymentMethod === 'cash') {
-        defaultGatewayName = 'الدفع عند الاستلام';
-      } else if (paymentMethod === 'apple_pay') {
-        defaultGatewayName = 'Apple Pay';
-      } else if (paymentMethod === 'mada') {
-        defaultGatewayName = 'بطاقة مدى';
-      } else {
-        defaultGatewayName = 'بوابة الدفع الإلكتروني';
-      }
-    }
-
-    const currentUserIdVal = customerUser ? customerUser.id : (userId || 'anon_guest');
-    const finalCustomerName = customerName.trim() || (customerUser ? customerUser.name : 'عميل البوفيه');
-
-    const newOrder: Order = {
-      id: orderNumber,
-      userId: currentUserIdVal,
-      customerName: finalCustomerName,
-      customerOffice: customerOffice || 'استلام مباشر',
-      items: [...cart],
-      totalPrice: cartTotal,
-      status: 'received',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      notes: notes || '',
-      paymentMethod,
-      paymentStatus: calculatedPaymentStatus,
-      paymentReference: paymentReference || (calculatedPaymentStatus === 'paid' ? `PAY-${Math.floor(100000 + Math.random() * 900000)}` : undefined),
-      paymentGateway: defaultGatewayName,
-      chatMessages: [],
-    };
-
-    processedOrderIdsRef.current.add(newOrder.id);
-    setOrders((prev) => [newOrder, ...prev]);
-    setUnreadStaffOrdersCount((prev) => prev + 1);
+  // Place Order: Supabase is confirmed before local UI is changed.
+  const placeOrder = async (
+    customerName: string, customerOffice: string, paymentMethod: PaymentMethod,
+    notes = '', paymentStatus?: PaymentStatus, paymentReference?: string, paymentGateway?: string
+  ): Promise<string> => {
+    if (!supabase || !isSupabaseConfigured()) { showToastMessage('تعذر الاتصال بقاعدة البيانات.', 'warning'); return ''; }
+    if (!buffetStatus.isOpen) { showToastMessage('البوفيه مغلق حالياً.', 'warning'); return ''; }
+    if (!cart.length) { showToastMessage('السلة فارغة.', 'warning'); return ''; }
+    const orderNumber = `#${Date.now().toString().slice(-8)}${Math.floor(Math.random() * 90 + 10)}`;
+    const finalPaymentStatus = paymentStatus ?? (paymentMethod === 'cash' ? 'unpaid' : 'paid');
+    const gateway = paymentGateway ?? (paymentMethod === 'cash' ? 'الدفع عند الاستلام' : 'بوابة الدفع الإلكتروني');
+    const { data, error } = await supabase!.from('orders').insert({
+      order_number: orderNumber, user_id: customerUser?.id ?? userId ?? null,
+      customer_name: customerName.trim() || customerUser?.name || 'عميل البوفيه',
+      customer_office: customerOffice.trim() || 'استلام مباشر', items: cart, total_price: cartTotal,
+      status: 'received', notes, payment_method: paymentMethod, payment_status: finalPaymentStatus,
+      payment_reference: paymentReference ?? null, payment_gateway: gateway, chat_messages: []
+    }).select('*').single();
+    if (error || !data) { console.error('Error inserting order:', error); showToastMessage('تعذر إرسال الطلب.', 'warning'); return ''; }
+    const order = mapOrder(data);
+    processedOrderIdsRef.current.add(order.id);
+    setOrders((current) => current.some((item) => item.id === order.id) ? current : [order, ...current]);
     clearCart();
-
-    // Insert into Supabase
-    if (isSupabaseConfigured() && supabase) {
-      supabase
-        .from('orders')
-        .insert({
-          user_id: currentUserIdVal,
-          order_number: orderNumber,
-          customer_name: finalCustomerName,
-          customer_office: customerOffice || '',
-          items: newOrder.items,
-          total_price: cartTotal,
-          payment_method: paymentMethod,
-          payment_status: calculatedPaymentStatus,
-          payment_reference: newOrder.paymentReference,
-          payment_gateway: defaultGatewayName,
-          status: 'received',
-          notes: notes || '',
-          chat_messages: [],
-          created_at: newOrder.createdAt,
-          updated_at: newOrder.updatedAt,
-        })
-        .then(({ error }) => {
-          if (error) console.error('Error inserting order to Supabase:', error);
-        });
-    }
-
-    soundManager.playNewOrderSound();
-    if (calculatedPaymentStatus === 'paid') {
-      showToastMessage('تم استلام الدفع الإلكتروني بنجاح! تم إرسال طلبك للبوفيه 💳✅', 'success');
-    } else {
-      showToastMessage('تم إرسال طلبك بنجاح! يرجى الدفع عند الاستلام في البوفيه 💵', 'success');
-    }
-
-    return orderNumber;
+    showToastMessage('تم إرسال طلبك بنجاح.', 'success');
+    return order.id;
   };
 
-  // Toggle order payment status
-  const toggleOrderPaymentStatus = (orderId: string, targetStatus?: PaymentStatus) => {
-    let nextPayStatus: PaymentStatus = 'paid';
-    setOrders((prev) =>
-      prev.map((o) => {
-        if (o.id === orderId) {
-          nextPayStatus = targetStatus || (o.paymentStatus === 'paid' ? 'unpaid' : 'paid');
-          return {
-            ...o,
-            paymentStatus: nextPayStatus,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return o;
-      })
-    );
-
-    if (isSupabaseConfigured() && supabase) {
-      supabase
-        .from('orders')
-        .update({
-          payment_status: nextPayStatus,
-          updated_at: new Date().toISOString(),
-        })
-        .or(`id.eq.${orderId},order_number.eq.${orderId}`)
-        .then(({ error }) => {
-          if (error) console.error('Error updating payment status in Supabase:', error);
-        });
-    }
-
-    showToastMessage('تم تحديث حالة الدفع للطلب بنجاح 💵', 'success');
+  const toggleOrderPaymentStatus = async (orderId: string, targetStatus?: PaymentStatus): Promise<void> => {
+    if (!supabase) return;
+    const order = orders.find((item) => item.id === orderId);
+    if (!order) return;
+    const paymentStatus = targetStatus ?? (order.paymentStatus === 'paid' ? 'unpaid' : 'paid');
+    const { error } = await supabase!.from('orders').update({ payment_status: paymentStatus, updated_at: new Date().toISOString() }).eq('order_number', orderId);
+    if (error) { console.error('Error updating payment:', error); showToastMessage('تعذر تحديث حالة الدفع.', 'warning'); }
   };
 
-  // Update order status
-  const updateOrderStatus = (orderId: string, newStatus: OrderStatus) => {
-    let targetOrderName = '';
-    setOrders((prev) =>
-      prev.map((o) => {
-        if (o.id === orderId) {
-          targetOrderName = o.customerName;
-          return {
-            ...o,
-            status: newStatus,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return o;
-      })
-    );
-
-    if (isSupabaseConfigured() && supabase) {
-      supabase
-        .from('orders')
-        .update({
-          status: newStatus,
-          updated_at: new Date().toISOString(),
-        })
-        .or(`id.eq.${orderId},order_number.eq.${orderId}`)
-        .then(({ error }) => {
-          if (error) console.error('Error updating order status in Supabase:', error);
-        });
-    }
-
-    if (newStatus === 'received') {
-      showToastMessage(`طلب ${orderId}: تم استلام طلبك وجارٍ تحضيره.`, 'info');
-      sendPushNotification(`البوفيه - طلب ${orderId}`, 'تم استلام طلبك وجارٍ تحضيره.');
-    } else if (newStatus === 'preparing') {
-      soundManager.playNewOrderSound();
-      showToastMessage(`طلب ${orderId}: طلبك قيد التحضير الآن. 👨‍🍳`, 'info');
-      sendPushNotification(`البوفيه - طلب ${orderId}`, 'طلبك قيد التحضير الآن.');
-    } else if (newStatus === 'ready') {
-      soundManager.playOrderReadySound();
-      confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 } });
-      showToastMessage(`🎉 طلبك ${orderId} جاهز للاستلام، يرجى التوجه إلى البوفيه.`, 'success');
-      sendPushNotification(`البوفيه - طلب ${orderId}`, '🎉 طلبك جاهز للاستلام، يرجى التوجه إلى البوفيه.');
-    } else if (newStatus === 'cancelled') {
-      showToastMessage(`طلب ${orderId}: تم إلغاء الطلب، يرجى التواصل مع البوفيه.`, 'warning');
-      sendPushNotification(`البوفيه - طلب ${orderId}`, 'تم إلغاء الطلب، يرجى التواصل مع البوفيه.');
-    } else if (newStatus === 'delivered') {
-      showToastMessage(`طلب ${orderId}: تم استلام الطلب بنجاح ✅`, 'success');
-    }
+  const updateOrderStatus = async (orderId: string, newStatus: OrderStatus): Promise<void> => {
+    if (!supabase) return;
+    const { error } = await supabase!.from('orders').update({ status: newStatus, updated_at: new Date().toISOString() }).eq('order_number', orderId);
+    if (error) { console.error('Error updating status:', error); showToastMessage('تعذر تحديث حالة الطلب.', 'warning'); return; }
+    if (newStatus === 'ready') soundManager.playOrderReadySound();
+    showToastMessage('تم تحديث حالة الطلب.', 'success');
   };
 
-  // Chat message
-  const addChatMessage = (orderId: string, text: string, sender: 'customer' | 'staff') => {
-    const timeStr = new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' });
-    let updatedChatMessages: ChatMessage[] = [];
-
-    setOrders((prev) =>
-      prev.map((o) => {
-        if (o.id === orderId) {
-          const newMsg: ChatMessage = {
-            id: `msg_${Date.now()}`,
-            sender,
-            text,
-            timestamp: timeStr,
-          };
-          updatedChatMessages = [...o.chatMessages, newMsg];
-          return {
-            ...o,
-            chatMessages: updatedChatMessages,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        return o;
-      })
-    );
-
-    if (isSupabaseConfigured() && supabase) {
-      supabase
-        .from('orders')
-        .update({
-          chat_messages: updatedChatMessages,
-          updated_at: new Date().toISOString(),
-        })
-        .or(`id.eq.${orderId},order_number.eq.${orderId}`)
-        .then(({ error }) => {
-          if (error) console.error('Error updating chat in Supabase:', error);
-        });
-    }
+  const addChatMessage = async (orderId: string, text: string, sender: 'customer' | 'staff'): Promise<void> => {
+    if (!supabase || !text.trim()) return;
+    const order = orders.find((item) => item.id === orderId);
+    if (!order) return;
+    const message: ChatMessage = { id: crypto.randomUUID(), sender, text: text.trim(), timestamp: new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' }) };
+    const { error } = await supabase!.from('orders').update({ chat_messages: [...order.chatMessages, message], updated_at: new Date().toISOString() }).eq('order_number', orderId);
+    if (error) { console.error('Error sending message:', error); showToastMessage('تعذر إرسال الرسالة.', 'warning'); }
   };
 
   // Menu Operations
@@ -1366,7 +1079,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`تمت إضافة الصنف "${newItem.name}" إلى المنيو`, 'success');
+    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ط§ظ„طµظ†ظپ "${newItem.name}" ط¥ظ„ظ‰ ط§ظ„ظ…ظ†ظٹظˆ`, 'success');
   };
 
   const updateMenuItem = (item: MenuItem) => {
@@ -1390,7 +1103,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`تم تحديث بيانات الصنف "${item.name}"`, 'info');
+    showToastMessage(`طھظ… طھط­ط¯ظٹط« ط¨ظٹط§ظ†ط§طھ ط§ظ„طµظ†ظپ "${item.name}"`, 'info');
   };
 
   const deleteMenuItem = (id: string) => {
@@ -1407,7 +1120,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    if (target) showToastMessage(`تم حذف الصنف "${target.name}"`, 'warning');
+    if (target) showToastMessage(`طھظ… ط­ط°ظپ ط§ظ„طµظ†ظپ "${target.name}"`, 'warning');
   };
 
   const toggleItemAvailability = (id: string) => {
@@ -1432,7 +1145,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(nextAvail ? 'تم إتاحة الصنف 🟢' : 'تم إيقاف الصنف مؤقتاً 🔴', nextAvail ? 'success' : 'warning');
+    showToastMessage(nextAvail ? 'طھظ… ط¥طھط§ط­ط© ط§ظ„طµظ†ظپ ًںں¢' : 'طھظ… ط¥ظٹظ‚ط§ظپ ط§ظ„طµظ†ظپ ظ…ط¤ظ‚طھط§ظ‹ ًں”´', nextAvail ? 'success' : 'warning');
   };
 
   // Staff Operations
@@ -1440,7 +1153,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Prevent duplicate usernames
     const exists = staff.some((s) => s.username.toLowerCase() === memberData.username.toLowerCase());
     if (exists) {
-      showToastMessage(`اسم المستخدم "${memberData.username}" مستخدم بالفعل، اختر اسماً آخر.`, 'warning');
+      showToastMessage(`ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… "${memberData.username}" ظ…ط³طھط®ط¯ظ… ط¨ط§ظ„ظپط¹ظ„طŒ ط§ط®طھط± ط§ط³ظ…ط§ظ‹ ط¢ط®ط±.`, 'warning');
       return;
     }
 
@@ -1459,7 +1172,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`تمت إضافة الموظف "${newMember.name}" بنجاح`, 'success');
+    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ط§ظ„ظ…ظˆط¸ظپ "${newMember.name}" ط¨ظ†ط¬ط§ط­`, 'success');
   };
 
   const updateStaff = (member: StaffMember) => {
@@ -1474,13 +1187,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`تم تعديل بيانات الموظف "${member.name}"`, 'info');
+    showToastMessage(`طھظ… طھط¹ط¯ظٹظ„ ط¨ظٹط§ظ†ط§طھ ط§ظ„ظ…ظˆط¸ظپ "${member.name}"`, 'info');
   };
 
   const deleteStaff = (id: string) => {
     const target = staff.find((s) => s.id === id);
     if (target?.username === 'admin' || id === 'staff-admin') {
-      showToastMessage('لا يمكن حذف حساب المدير الافتراضي النظامي 🔒', 'warning');
+      showToastMessage('ظ„ط§ ظٹظ…ظƒظ† ط­ط°ظپ ط­ط³ط§ط¨ ط§ظ„ظ…ط¯ظٹط± ط§ظ„ط§ظپطھط±ط§ط¶ظٹ ط§ظ„ظ†ط¸ط§ظ…ظٹ ًں”’', 'warning');
       return;
     }
 
@@ -1496,7 +1209,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage('تم حذف حساب الموظف بنجاح', 'warning');
+    showToastMessage('طھظ… ط­ط°ظپ ط­ط³ط§ط¨ ط§ظ„ظ…ظˆط¸ظپ ط¨ظ†ط¬ط§ط­', 'warning');
   };
 
   const resetDemoData = () => {
@@ -1507,7 +1220,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setAttendanceRecords(INITIAL_ATTENDANCE);
     setOptionGroups(INITIAL_OPTION_GROUPS);
     setCurrentStaff(null);
-    localStorage.removeItem(LOCAL_STORAGE_KEY_ORDERS);
 
     if (isSupabaseConfigured() && supabase) {
       supabase
@@ -1519,7 +1231,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage('تم تفريغ وتصفير جميع الطلبات والبيانات بنجاح 🧼✨', 'success');
+    showToastMessage('طھظ… طھظپط±ظٹط؛ ظˆطھطµظپظٹط± ط¬ظ…ظٹط¹ ط§ظ„ط·ظ„ط¨ط§طھ ظˆط§ظ„ط¨ظٹط§ظ†ط§طھ ط¨ظ†ط¬ط§ط­ ًں§¼âœ¨', 'success');
   };
 
   return (
@@ -1610,3 +1322,6 @@ export const useApp = () => {
   }
   return context;
 };
+
+
+
