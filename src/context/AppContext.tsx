@@ -147,6 +147,9 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+// جلسة العميل فقط: الطلبات وبقية بيانات التشغيل تبقى في Supabase.
+const CUSTOMER_SESSION_STORAGE_KEY = 'buffet_customer_user_v1';
+
 
 const DEFAULT_GATEWAY_CONFIG: PaymentGatewayConfig = {
   activeGateway: 'simulated',
@@ -192,8 +195,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' } | null>(null);
 
-  // Cloud is the source of truth; no browser persistence is used.
+  // Cloud is the source of truth; only the customer login session is persisted locally.
   const [customerUser, setCustomerUser] = useState<AppUser | null>(null);
+  const [customerSessionRestored, setCustomerSessionRestored] = useState(false);
   const [unreadStaffOrdersCount, setUnreadStaffOrdersCount] = useState(0);
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [userId, setUserId] = useState('');
@@ -209,6 +213,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [optionGroups, setOptionGroups] = useState<CustomizationGroup[]>([]);
   const [paymentGatewayConfig, setPaymentGatewayConfig] = useState<PaymentGatewayConfig>(DEFAULT_GATEWAY_CONFIG);
+
+  // Restore the customer session after a page refresh or browser restart.
+  useEffect(() => {
+    try {
+      const savedUser = window.localStorage.getItem(CUSTOMER_SESSION_STORAGE_KEY);
+      if (savedUser) {
+        const parsedUser = JSON.parse(savedUser) as AppUser;
+        if (!parsedUser?.id || !parsedUser?.name || !parsedUser?.username) {
+          window.localStorage.removeItem(CUSTOMER_SESSION_STORAGE_KEY);
+        } else {
+          setCustomerUser(parsedUser);
+          setUserId(parsedUser.id);
+        }
+      }
+    } catch (error) {
+      console.error('تعذر استعادة جلسة العميل المحفوظة:', error);
+      window.localStorage.removeItem(CUSTOMER_SESSION_STORAGE_KEY);
+    } finally {
+      setCustomerSessionRestored(true);
+    }
+  }, []);
+
+  // Keep the customer session persistent, and remove it only on logout.
+  useEffect(() => {
+    if (!customerSessionRestored) return;
+
+    try {
+      if (customerUser) {
+        window.localStorage.setItem(CUSTOMER_SESSION_STORAGE_KEY, JSON.stringify(customerUser));
+      } else {
+        window.localStorage.removeItem(CUSTOMER_SESSION_STORAGE_KEY);
+      }
+    } catch (error) {
+      console.error('تعذر حفظ جلسة العميل محلياً:', error);
+    }
+  }, [customerUser, customerSessionRestored]);
 
   // Supabase Auth Listener
   useEffect(() => {
@@ -641,6 +681,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     setCustomerUser(foundUser);
     setUserId(foundUser.id);
+    try {
+      window.localStorage.setItem(CUSTOMER_SESSION_STORAGE_KEY, JSON.stringify(foundUser));
+    } catch (error) {
+      console.error('تعذر حفظ جلسة العميل بعد تسجيل الدخول:', error);
+    }
     showToastMessage(`مرحباً بعودتك يا ${foundUser.name}! 👋`, 'success');
 
     return { success: true, message: 'تم تسجيل الدخول بنجاح! 🎉' };
@@ -648,6 +693,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const logoutCustomerUser = () => {
     setCustomerUser(null);
+    setUserId('');
+    try {
+      window.localStorage.removeItem(CUSTOMER_SESSION_STORAGE_KEY);
+    } catch (error) {
+      console.error('تعذر حذف جلسة العميل:', error);
+    }
     showToastMessage('تم تسجيل الخروج بنجاح 👋', 'info');
   };
 
