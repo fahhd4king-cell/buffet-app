@@ -1,34 +1,26 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-// Read environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// قيم ثابتة ومباشرة لضمان نجاح الاتصال بدون أخطاء البيئة
+const supabaseUrl = 'https://nvoavtmtiyvvmjqojua.supabase.co';
+const supabaseAnonKey = 'sb_publishable_cpVyL8MaD25fv1GTk5XB1A_PdQbxpOt';
 
 export const isSupabaseConfigured = (): boolean => {
-  return Boolean(
-    supabaseUrl &&
-    supabaseAnonKey &&
-    supabaseUrl !== 'YOUR_SUPABASE_URL' &&
-    supabaseAnonKey !== 'YOUR_SUPABASE_ANON_KEY' &&
-    supabaseUrl.startsWith('https://')
-  );
+  return true;
 };
 
 // Singleton instance for Supabase client
-export const supabase: SupabaseClient | null = isSupabaseConfigured()
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-      realtime: {
-        params: {
-          eventsPerSecond: 10,
-        },
-      },
-    })
-  : null;
+export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10,
+    },
+  },
+});
 
 // Helper to safely get user ID or anonymous session ID
 export const getCurrentUserId = async (): Promise<string | null> => {
