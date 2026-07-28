@@ -164,8 +164,8 @@ const DEFAULT_GATEWAY_CONFIG: PaymentGatewayConfig = {
 
 const DEFAULT_BUFFET_STATUS: BuffetStatus = {
   isOpen: true,
-  closureReason: 'ط§ظ†طھظ‡ظ‰ ظˆظ‚طھ ط§ظ„ط¯ظˆط§ظ… ط§ظ„ط±ط³ظ…ظٹ',
-  reopenTime: '6:00 طµط¨ط§ط­ط§ظ‹',
+  closureReason: 'انتهى وقت الدوام الرسمي',
+  reopenTime: '6:00 صباحاً',
   autoScheduleEnabled: false,
   workingHours: {
     openHour: '06:00',
@@ -184,10 +184,10 @@ const mapOrder = (row: any): Order => ({
   paymentMethod: row.payment_method ?? 'cash', paymentStatus: row.payment_status ?? 'unpaid',
   paymentReference: row.payment_reference ?? undefined, paymentGateway: row.payment_gateway ?? undefined,
 });
-export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+export function AppProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>('welcome');
   const [selectedCategory, setSelectedCategory] = useState<CategoryId | 'all'>('all');
-  const [activeBranch, setActiveBranch] = useState<string>('ط¨ظˆظپظٹظ‡ ظپط§ط¯ظٹ');
+  const [activeBranch, setActiveBranch] = useState<string>('بوفيه فادي');
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const [cart, setCart] = useState<OrderItem[]>([]);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'warning' } | null>(null);
@@ -244,95 +244,96 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     let isMounted = true;
 
-    // Fetch initial orders
-    supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .then(({ data, error }) => {
-        if (!error && data && data.length > 0 && isMounted) {
-          const mapped: Order[] = data.map((d: any) => ({
-            id: d.order_number,
-            customerName: d.customer_name || 'ط¹ظ…ظٹظ„ ط§ظ„ط¨ظˆظپظٹظ‡',
-            customerOffice: d.customer_office || '',
-            items: d.items || [],
-            totalPrice: Number(d.total_price) || 0,
-            status: d.status || 'received',
-            createdAt: d.created_at || new Date().toISOString(),
-            updatedAt: d.updated_at || new Date().toISOString(),
-            notes: d.notes || '',
-            chatMessages: d.chat_messages || [],
-            paymentMethod: d.payment_method || 'cash',
-            paymentStatus: d.payment_status || 'unpaid',
-            paymentReference: d.payment_reference,
-            paymentGateway: d.payment_gateway,
-          }));
-          setOrders(mapped);
-          mapped.forEach((o) => processedOrderIdsRef.current.add(o.id));
-        }
-      });
+    const loadInitialData = async () => {
+      try {
+        const [ordersResult, staffResult, statusResult, menuResult] = await Promise.all([
+          supabase!.from('orders').select('*').order('created_at', { ascending: false }),
+          supabase!.from('staff').select('*'),
+          supabase!.from('buffet_status').select('*').eq('id', 'main').maybeSingle(),
+          supabase!.from('menu_items').select('*'),
+        ]);
 
-    // Fetch initial staff
-    supabase
-      .from('staff')
-      .select('*')
-      .then(({ data, error }) => {
-        if (!error && data && data.length > 0 && isMounted) {
-          setStaff(data as StaffMember[]);
-        }
-      });
+        if (!isMounted) return;
 
-    // Fetch initial buffet status
-    supabase
-      .from('buffet_status')
-      .select('*')
-      .eq('id', 'main')
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (!error && data && isMounted) {
-          setBuffetStatus((prev) => ({
-            ...prev,
-            isOpen: Boolean(data.is_open),
-            closureReason: data.closure_reason || prev.closureReason,
-            reopenTime: data.reopen_time || prev.reopenTime,
-            autoScheduleEnabled: Boolean(data.auto_schedule_enabled),
-            workingHours: data.working_hours || prev.workingHours,
-          }));
+        if (ordersResult.error) {
+          console.error('تعذر جلب الطلبات من Supabase:', ordersResult.error);
+          showToastMessage('تعذر جلب الطلبات من الخادم. تحقق من الاتصال والصلاحيات.', 'warning');
+        } else {
+          const cloudOrders = (ordersResult.data ?? []).map(mapOrder);
+          setOrders(cloudOrders);
+          cloudOrders.forEach((order) => processedOrderIdsRef.current.add(order.id));
         }
-      });
 
-    // Fetch initial menu items
-    supabase
-      .from('menu_items')
-      .select('*')
-      .then(({ data, error }) => {
-        if (!error && data && data.length > 0 && isMounted) {
-          const mapped: MenuItem[] = data.map((m: any) => ({
-            id: m.id,
-            name: m.name,
-            description: m.description || '',
-            price: Number(m.price) || 0,
-            category: m.category,
-            image: m.image || '',
-            isAvailable: Boolean(m.is_available),
-            customizationGroupIds: m.customization_group_ids || [],
-          }));
-          setMenuItems(mapped);
+        if (staffResult.error) {
+          console.error('تعذر جلب الموظفين من Supabase:', staffResult.error);
+          setStaff(INITIAL_STAFF);
+          showToastMessage('تعذر جلب الموظفين؛ تم عرض البيانات الافتراضية مؤقتاً.', 'warning');
+        } else {
+          setStaff(staffResult.data?.length ? (staffResult.data as StaffMember[]) : INITIAL_STAFF);
         }
-      });
+
+        if (menuResult.error) {
+          console.error('تعذر جلب المنيو من Supabase:', menuResult.error);
+          setMenuItems(INITIAL_MENU_ITEMS);
+          showToastMessage('تعذر جلب المنيو؛ تم عرض المنيو الافتراضي مؤقتاً.', 'warning');
+        } else if (!menuResult.data?.length) {
+          setMenuItems(INITIAL_MENU_ITEMS);
+          showToastMessage('المنيو السحابي فارغ؛ تم عرض المنيو الافتراضي مؤقتاً.', 'info');
+        } else {
+          setMenuItems(menuResult.data.map((item: any): MenuItem => ({
+            id: item.id,
+            name: item.name,
+            description: item.description ?? '',
+            price: Number(item.price ?? 0),
+            category: item.category,
+            image: item.image ?? '',
+            isAvailable: Boolean(item.is_available),
+            customizationGroupIds: item.customization_group_ids ?? [],
+          })));
+        }
+
+        if (statusResult.error) {
+          console.error('تعذر جلب حالة البوفيه من Supabase:', statusResult.error);
+          setBuffetStatus(DEFAULT_BUFFET_STATUS);
+          showToastMessage('تعذر جلب حالة البوفيه؛ استُخدمت الحالة الافتراضية.', 'warning');
+        } else if (statusResult.data) {
+          const status = statusResult.data;
+          setBuffetStatus({
+            isOpen: Boolean(status.is_open),
+            closureReason: status.closure_reason ?? DEFAULT_BUFFET_STATUS.closureReason,
+            reopenTime: status.reopen_time ?? DEFAULT_BUFFET_STATUS.reopenTime,
+            autoScheduleEnabled: Boolean(status.auto_schedule_enabled),
+            workingHours: status.working_hours ?? DEFAULT_BUFFET_STATUS.workingHours,
+          });
+        } else {
+          setBuffetStatus(DEFAULT_BUFFET_STATUS);
+        }
+      } catch (error) {
+        console.error('خطأ غير متوقع أثناء تحميل بيانات التطبيق:', error);
+        if (isMounted) {
+          setMenuItems(INITIAL_MENU_ITEMS);
+          setStaff(INITIAL_STAFF);
+          setBuffetStatus(DEFAULT_BUFFET_STATUS);
+          showToastMessage('تعذر الاتصال بالخادم. تم عرض البيانات الافتراضية مؤقتاً.', 'warning');
+        }
+      }
+    };
+
+    void loadInitialData();
 
     // Subscribe to Realtime Postgres Changes
-    const channel = supabase
+    const realtimeClient = supabase! as any;
+    const channel = realtimeClient
       .channel('buffet_global_realtime')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'orders' },
-        (payload) => {
+        (payload: any) => {
           if (payload.eventType === 'INSERT') {
             const row: any = payload.new;
             const newOrder: Order = {
               id: row.order_number,
-              customerName: row.customer_name || 'ط¹ظ…ظٹظ„ ط§ظ„ط¨ظˆظپظٹظ‡',
+              customerName: row.customer_name || 'عميل البوفيه',
               customerOffice: row.customer_office || '',
               items: row.items || [],
               totalPrice: Number(row.total_price) || 0,
@@ -356,7 +357,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             if (!processedOrderIdsRef.current.has(newOrder.id)) {
               processedOrderIdsRef.current.add(newOrder.id);
               soundManager.playNewOrderSound();
-              showToastMessage(`ظˆطµظ„ ط·ظ„ط¨ ط¬ط¯ظٹط¯ ${newOrder.id} (${newOrder.customerName})! ًں””`, 'success');
+              showToastMessage(`وصل طلب جديد ${newOrder.id} (${newOrder.customerName})! 🔔`, 'success');
             }
           } else if (payload.eventType === 'UPDATE') {
             const row: any = payload.new;
@@ -370,7 +371,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   if (o.status !== 'ready' && updatedStatus === 'ready') {
                     soundManager.playOrderReadySound();
                     confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
-                    showToastMessage(`ط·ظ„ط¨ظƒ ${updatedId} ط£طµط¨ط­ ط¬ط§ظ‡ط²ط§ظ‹ ط§ظ„ط¢ظ† ظ…ظ† ط§ظ„ط¨ظˆظپظٹظ‡! ًں””`, 'success');
+                    showToastMessage(`طلبك ${updatedId} أصبح جاهزاً الآن من البوفيه! 🔔`, 'success');
                   }
                   return {
                     ...o,
@@ -392,7 +393,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'buffet_status' },
-        (payload) => {
+        (payload: any) => {
           if (payload.new) {
             const row: any = payload.new;
             setBuffetStatus((prev) => ({
@@ -407,7 +408,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'staff' },
-        (payload) => {
+        (payload: any) => {
           if (payload.eventType === 'INSERT') {
             const row: StaffMember = payload.new as StaffMember;
             setStaff((prev) => {
@@ -426,7 +427,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'menu_items' },
-        (payload) => {
+        (payload: any) => {
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const m: any = payload.new;
             const updatedItem: MenuItem = {
@@ -458,7 +459,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     return () => {
       isMounted = false;
-      channel.unsubscribe();
+      void realtimeClient.removeChannel(channel);
     };
   }, []);
 
@@ -481,9 +482,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     void load();
 
-    const channel = supabase
+    const realtimeClient = supabase! as any;
+    const channel = realtimeClient
       .channel('buffet-auxiliary-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'option_groups' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'option_groups' }, (payload: any) => {
         if (payload.eventType === 'DELETE') {
           setOptionGroups((current) => current.filter((group) => group.id !== payload.old.id));
           return;
@@ -495,10 +497,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const next = [...current]; next[found] = group; return next;
         });
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'buffet_location' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'buffet_location' }, (payload: any) => {
         if (payload.eventType !== 'DELETE') setBuffetLocation(payload.new as BuffetLocation);
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_records' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_records' }, (payload: any) => {
         if (payload.eventType === 'DELETE') {
           setAttendanceRecords((current) => current.filter((record) => record.id !== payload.old.id));
           return;
@@ -510,12 +512,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const next = [...current]; next[found] = record; return next;
         });
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_gateway_config' }, (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_gateway_config' }, (payload: any) => {
         if (payload.eventType !== 'DELETE' && payload.new.config) setPaymentGatewayConfig(payload.new.config as PaymentGatewayConfig);
       })
-      .subscribe();
+      .subscribe((status: any) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          showToastMessage('تعذر تشغيل التحديث اللحظي. ستظهر البيانات عند إعادة المحاولة.', 'warning');
+        }
+      });
 
-    return () => { void supabase!.removeChannel(channel); };
+    return () => { void realtimeClient.removeChannel(channel); };
   }, []);
 
   const showToastMessage = (message: string, type: 'success' | 'info' | 'warning' = 'info') => {
@@ -538,7 +544,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const cleanName = name.trim();
 
     if (!cleanName || !cleanUsername || !password) {
-      return { success: false, message: 'ظٹط±ط¬ظ‰ ط¥ط¯ط®ط§ظ„ ط¬ظ…ظٹط¹ ط§ظ„ط¨ظٹط§ظ†ط§طھ ط§ظ„ظ…ط·ظ„ظˆط¨ط©' };
+      return { success: false, message: 'يرجى إدخال جميع البيانات المطلوبة' };
     }
 
     let isUsernameTaken = false;
@@ -550,7 +556,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     if (isUsernameTaken) {
-      return { success: false, message: 'ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ظ…ط³طھط®ط¯ظ… ظ…ط³ط¨ظ‚ط§ظ‹طŒ ظٹط±ط¬ظ‰ ط§ط®طھظٹط§ط± ط§ط³ظ… ط¢ط®ط± â‌Œ' };
+      return { success: false, message: 'اسم المستخدم مستخدم مسبقاً، يرجى اختيار اسم آخر ❌' };
     }
 
     // Securely hash password
@@ -584,9 +590,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     setCustomerUser(newUser);
     setUserId(newUser.id);
-    showToastMessage(`ط£ظ‡ظ„ط§ظ‹ ط¨ظƒ ظٹط§ ${cleanName}! طھظ… ط¥ظ†ط´ط§ط، ط§ظ„ط­ط³ط§ط¨ ط¨ظ†ط¬ط§ط­ âœ¨`, 'success');
+    showToastMessage(`أهلاً بك يا ${cleanName}! تم إنشاء الحساب بنجاح ✨`, 'success');
 
-    return { success: true, message: 'طھظ… ط¥ظ†ط´ط§ط، ط§ظ„ط­ط³ط§ط¨ ط¨ظ†ط¬ط§ط­! âœ¨' };
+    return { success: true, message: 'تم إنشاء الحساب بنجاح! ✨' };
   };
 
   // Customer Account Login
@@ -600,7 +606,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const cleanUsername = username.trim().toLowerCase();
 
     if (!cleanUsername || !password) {
-      return { success: false, message: 'ظٹط±ط¬ظ‰ ط¥ط¯ط®ط§ظ„ ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ظˆظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط±' };
+      return { success: false, message: 'يرجى إدخال اسم المستخدم وكلمة المرور' };
     }
 
     let foundUser: AppUser | null = null;
@@ -621,28 +627,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     if (!foundUser) {
-      return { success: false, message: 'ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ط£ظˆ ظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط± ط؛ظٹط± طµط­ظٹط­ط© â‌Œ' };
+      return { success: false, message: 'اسم المستخدم أو كلمة المرور غير صحيحة ❌' };
     }
 
     if (foundUser.status === 'inactive') {
-      return { success: false, message: 'ط§ظ„ط­ط³ط§ط¨ ظ…ط¹ط·ظ„ ط­ط§ظ„ظٹط§ظ‹طŒ ظٹط±ط¬ظ‰ ط§ظ„طھظˆط§طµظ„ ظ…ط¹ ط§ظ„ط¥ط¯ط§ط±ط©.' };
+      return { success: false, message: 'الحساب معطل حالياً، يرجى التواصل مع الإدارة.' };
     }
 
     const isValid = await verifyPassword(password, foundUser.passwordHash);
     if (!isValid) {
-      return { success: false, message: 'ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ط£ظˆ ظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط± ط؛ظٹط± طµط­ظٹط­ط© â‌Œ' };
+      return { success: false, message: 'اسم المستخدم أو كلمة المرور غير صحيحة ❌' };
     }
 
     setCustomerUser(foundUser);
     setUserId(foundUser.id);
-    showToastMessage(`ظ…ط±ط­ط¨ط§ظ‹ ط¨ط¹ظˆط¯طھظƒ ظٹط§ ${foundUser.name}! ًں‘‹`, 'success');
+    showToastMessage(`مرحباً بعودتك يا ${foundUser.name}! 👋`, 'success');
 
-    return { success: true, message: 'طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط¯ط®ظˆظ„ ط¨ظ†ط¬ط§ط­! ًںژ‰' };
+    return { success: true, message: 'تم تسجيل الدخول بنجاح! 🎉' };
   };
 
   const logoutCustomerUser = () => {
     setCustomerUser(null);
-    showToastMessage('طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط®ط±ظˆط¬ ط¨ظ†ط¬ط§ط­ ًں‘‹', 'info');
+    showToastMessage('تم تسجيل الخروج بنجاح 👋', 'info');
   };
 
   const markStaffOrdersAsRead = () => {
@@ -653,7 +659,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const next = !soundEnabled;
     setSoundEnabled(next);
     soundManager.enabled = next;
-    showToastMessage(next ? 'طھظ… طھظپط¹ظٹظ„ ط§ظ„طھظ†ط¨ظٹظ‡ط§طھ ط§ظ„طµظˆطھظٹط© ًں””' : 'طھظ… ظƒطھظ… ط§ظ„طھظ†ط¨ظٹظ‡ط§طھ ط§ظ„طµظˆطھظٹط© ًں”•', 'info');
+    showToastMessage(next ? 'تم تفعيل التنبيهات الصوتية 🔔' : 'تم كتم التنبيهات الصوتية 🔕', 'info');
   };
 
   // Option Groups CRUD Handlers
@@ -664,13 +670,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
     const updated = [...optionGroups, newGroup];
     setOptionGroups(updated);
-    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ظ…ط¬ظ…ظˆط¹ط© ط§ظ„ط®ظٹط§ط±ط§طھ "${newGroup.name}" ط¨ظ†ط¬ط§ط­ âœ¨`, 'success');
+    showToastMessage(`تمت إضافة مجموعة الخيارات "${newGroup.name}" بنجاح ✨`, 'success');
   };
 
   const updateOptionGroup = (group: CustomizationGroup) => {
     const updated = optionGroups.map((g) => (g.id === group.id ? group : g));
     setOptionGroups(updated);
-    showToastMessage(`طھظ… طھط­ط¯ظٹط« ظ…ط¬ظ…ظˆط¹ط© "${group.name}" ط¨ظ†ط¬ط§ط­ âœڈï¸ڈ`, 'success');
+    showToastMessage(`تم تحديث مجموعة "${group.name}" بنجاح ✏️`, 'success');
   };
 
   const deleteOptionGroup = (id: string) => {
@@ -688,7 +694,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return item;
     });
     setMenuItems(updatedMenuItems);
-    showToastMessage(`طھظ… ط­ط°ظپ ظ…ط¬ظ…ظˆط¹ط© ط§ظ„ط®ظٹط§ط±ط§طھ "${groupName || ''}" ط¨ظ†ط¬ط§ط­ ًں—‘ï¸ڈ`, 'info');
+    showToastMessage(`تم حذف مجموعة الخيارات "${groupName || ''}" بنجاح 🗑️`, 'info');
   };
 
   const toggleOptionGroupStatus = (id: string) => {
@@ -714,7 +720,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return g;
     });
     setOptionGroups(updated);
-    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ط®ظٹط§ط± "${newOpt.name}" ط¨ظ†ط¬ط§ط­ â‍•`, 'success');
+    showToastMessage(`تمت إضافة خيار "${newOpt.name}" بنجاح ➕`, 'success');
   };
 
   const updateOptionInGroup = (groupId: string, option: OptionItem) => {
@@ -725,7 +731,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return g;
     });
     setOptionGroups(updated);
-    showToastMessage(`طھظ… طھط­ط¯ظٹط« ط§ظ„ط®ظٹط§ط± "${option.name}" ط¨ظ†ط¬ط§ط­ âœڈï¸ڈ`, 'success');
+    showToastMessage(`تم تحديث الخيار "${option.name}" بنجاح ✏️`, 'success');
   };
 
   const deleteOptionFromGroup = (groupId: string, optionId: string) => {
@@ -736,7 +742,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return g;
     });
     setOptionGroups(updated);
-    showToastMessage('طھظ… ط­ط°ظپ ط§ظ„ط®ظٹط§ط± ط¨ظ†ط¬ط§ط­ ًں—‘ï¸ڈ', 'info');
+    showToastMessage('تم حذف الخيار بنجاح 🗑️', 'info');
   };
 
   const toggleOptionAvailability = (groupId: string, optionId: string) => {
@@ -790,27 +796,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     );
     if (found) {
       if (found.status === 'inactive') {
-        showToastMessage('ط­ط³ط§ط¨ ظ‡ط°ط§ ط§ظ„ظ…ظˆط¸ظپ ط؛ظٹط± ظ†ط´ط· ط­ط§ظ„ظٹط§ظ‹طŒ ظٹط±ط¬ظ‰ ظ…ط±ط§ط¬ط¹ط© ط¥ط¯ط§ط±ط© ط§ظ„ط¨ظˆظپظٹظ‡.', 'warning');
+        showToastMessage('حساب هذا الموظف غير نشط حالياً، يرجى مراجعة إدارة البوفيه.', 'warning');
         return false;
       }
       setCurrentStaff(found);
-      const roleTitle = found.role || 'ظ…ط´ط±ظپ ط§ظ„ط¨ظˆظپظٹظ‡';
-      showToastMessage(`ظ…ط±ط­ط¨ط§ظ‹ ط¨ظƒ ظٹط§ ${found.name} (${roleTitle}) ًں‘‹`, 'success');
+      const roleTitle = found.role || 'مشرف البوفيه';
+      showToastMessage(`مرحباً بك يا ${found.name} (${roleTitle}) 👋`, 'success');
       return true;
     }
-    showToastMessage('ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… ط£ظˆ ظƒظ„ظ…ط© ط§ظ„ظ…ط±ظˆط± ط؛ظٹط± طµط­ظٹط­ط© â‌Œ', 'warning');
+    showToastMessage('اسم المستخدم أو كلمة المرور غير صحيحة ❌', 'warning');
     return false;
   };
 
   const logoutStaff = () => {
     setCurrentStaff(null);
-    showToastMessage('طھظ… طھط³ط¬ظٹظ„ ط®ط±ظˆط¬ ط§ظ„ظ…ظˆط¸ظپ ًں‘‹', 'info');
+    showToastMessage('تم تسجيل خروج الموظف 👋', 'info');
   };
 
   // GPS & Attendance
   const updateBuffetLocation = (loc: BuffetLocation) => {
     setBuffetLocation(loc);
-    showToastMessage('طھظ… طھط­ط¯ظٹط« ظ…ظˆظ‚ط¹ ظˆظ†ط·ط§ظ‚ ط§ظ„ط¨ظˆظپظٹظ‡ ط¨ظ†ط¬ط§ط­ ًں“چ', 'success');
+    showToastMessage('تم تحديث موقع ونطاق البوفيه بنجاح 📍', 'success');
   };
 
   const clockInStaff = async (
@@ -820,7 +826,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   ): Promise<{ success: boolean; message: string; distance: number }> => {
     const distance = calculateDistanceMeters(lat, lng, buffetLocation.lat, buffetLocation.lng);
     if (distance > buffetLocation.allowedRadiusMeters) {
-      const errorMsg = 'ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط¯ط§ط®ظ„ ط§ظ„ط¨ظˆظپظٹظ‡ ظ„طھط³ط¬ظٹظ„ ط§ظ„ط­ط¶ظˆط±';
+      const errorMsg = 'يجب أن تكون داخل البوفيه لتسجيل الحضور';
       showToastMessage(errorMsg, 'warning');
       return { success: false, message: errorMsg, distance };
     }
@@ -832,7 +838,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const newRecord: AttendanceRecord = {
       id: `att_${Date.now()}`,
       staffId,
-      staffName: targetStaff ? targetStaff.name : 'ظ…ظˆط¸ظپ ط§ظ„ط¨ظˆظپظٹظ‡',
+      staffName: targetStaff ? targetStaff.name : 'موظف البوفيه',
       date: todayStr,
       checkInTime: timeStr,
       status: 'present',
@@ -841,7 +847,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     };
 
     setAttendanceRecords((prev) => [newRecord, ...prev]);
-    const successMsg = `طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط­ط¶ظˆط± ط¨ظ†ط¬ط§ط­ ط§ظ„ط³ط§ط¹ط© ${timeStr} ًں“چ (${distance} ظ…طھط± ظ…ظ† ط§ظ„ط¨ظˆظپظٹظ‡)`;
+    const successMsg = `تم تسجيل الحضور بنجاح الساعة ${timeStr} 📍 (${distance} متر من البوفيه)`;
     showToastMessage(successMsg, 'success');
     return { success: true, message: successMsg, distance };
   };
@@ -853,7 +859,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   ): Promise<{ success: boolean; message: string; distance: number }> => {
     const distance = calculateDistanceMeters(lat, lng, buffetLocation.lat, buffetLocation.lng);
     if (distance > buffetLocation.allowedRadiusMeters) {
-      const errorMsg = 'ظٹط¬ط¨ ط£ظ† طھظƒظˆظ† ط¯ط§ط®ظ„ ط§ظ„ط¨ظˆظپظٹظ‡ ظ„طھط³ط¬ظٹظ„ ط§ظ„ط§ظ†طµط±ط§ظپ';
+      const errorMsg = 'يجب أن تكون داخل البوفيه لتسجيل الانصراف';
       showToastMessage(errorMsg, 'warning');
       return { success: false, message: errorMsg, distance };
     }
@@ -870,7 +876,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             ...rec,
             checkOutTime: timeStr,
             status: 'completed' as const,
-            workingHours: '8 ط³ط§ط¹ط§طھ',
+            workingHours: '8 ساعات',
           };
         }
         return rec;
@@ -880,9 +886,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         next.unshift({
           id: `att_${Date.now()}`,
           staffId,
-          staffName: targetStaff ? targetStaff.name : 'ظ…ط´ط±ظپ ط§ظ„ط¨ظˆظپظٹظ‡',
+          staffName: targetStaff ? targetStaff.name : 'مشرف البوفيه',
           date: todayStr,
-          checkInTime: 'ط؛ظٹط± ظ…ط³ط¬ظ„',
+          checkInTime: 'غير مسجل',
           checkOutTime: timeStr,
           status: 'completed',
           distanceFromBuffetMeters: distance,
@@ -891,40 +897,53 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return next;
     });
 
-    const successMsg = `طھظ… طھط³ط¬ظٹظ„ ط§ظ„ط§ظ†طµط±ط§ظپ ط¨ظ†ط¬ط§ط­ ط§ظ„ط³ط§ط¹ط© ${timeStr} ًں“چ`;
+    const successMsg = `تم تسجيل الانصراف بنجاح الساعة ${timeStr} 📍`;
     showToastMessage(successMsg, 'success');
     return { success: true, message: successMsg, distance };
   };
 
   // Buffet Open/Close Status
-  const setBuffetIsOpen = (isOpen: boolean, closureReason?: string, reopenTime?: string) => {
+  const setBuffetIsOpen = async (isOpen: boolean, closureReason?: string, reopenTime?: string) => {
+    if (!supabase) {
+      showToastMessage('تعذر تغيير حالة البوفيه: لا يوجد اتصال بقاعدة البيانات.', 'warning');
+      return;
+    }
+
+    const normalizedReason = closureReason?.trim();
+    if (!isOpen && !normalizedReason) {
+      showToastMessage('يرجى كتابة سبب إغلاق البوفيه قبل التأكيد.', 'warning');
+      return;
+    }
+
     const nextStatus: BuffetStatus = {
       ...buffetStatus,
       isOpen,
-      closureReason: closureReason ?? buffetStatus.closureReason,
+      closureReason: isOpen ? '' : normalizedReason!,
       reopenTime: reopenTime ?? buffetStatus.reopenTime,
     };
-    setBuffetStatus(nextStatus);
 
-    if (isSupabaseConfigured() && supabase) {
-      supabase
-        .from('buffet_status')
-        .upsert({
-          id: 'main',
-          is_open: isOpen,
-          closure_reason: closureReason ?? buffetStatus.closureReason,
-          reopen_time: reopenTime ?? buffetStatus.reopenTime,
-          updated_at: new Date().toISOString(),
-        })
-        .then(({ error }) => {
-          if (error) console.error('Error updating buffet_status in Supabase:', error);
-        });
-    }
+    try {
+      const { error } = await supabase!.from('buffet_status').upsert({
+        id: 'main',
+        is_open: nextStatus.isOpen,
+        closure_reason: nextStatus.closureReason,
+        reopen_time: nextStatus.reopenTime,
+        auto_schedule_enabled: nextStatus.autoScheduleEnabled,
+        working_hours: nextStatus.workingHours,
+        updated_at: new Date().toISOString(),
+      });
 
-    if (isOpen) {
-      showToastMessage('طھظ… ظپطھط­ ط§ظ„ط¨ظˆظپظٹظ‡ ظˆطھظپط¹ظٹظ„ ط§ط³طھظ‚ط¨ط§ظ„ ط§ظ„ط·ظ„ط¨ط§طھ ًںں¢', 'success');
-    } else {
-      showToastMessage('طھظ… ط¥ط؛ظ„ط§ظ‚ ط§ظ„ط¨ظˆظپظٹظ‡ ظˆطھط¹ط·ظٹظ„ ط¥ط±ط³ط§ظ„ ط§ظ„ط·ظ„ط¨ط§طھ ط§ظ„ط¬ط¯ظٹط¯ط© ًں”´', 'warning');
+      if (error) throw error;
+      setBuffetStatus(nextStatus);
+      showToastMessage(
+        isOpen
+          ? 'تم فتح البوفيه واستقبال الطلبات.'
+          : `تم إغلاق البوفيه. السبب: ${nextStatus.closureReason}`,
+        isOpen ? 'success' : 'warning'
+      );
+    } catch (error) {
+      console.error('تعذر تحديث حالة البوفيه:', error);
+      showToastMessage('تعذر تغيير حالة البوفيه. تحقق من الاتصال وصلاحيات Supabase ثم أعد المحاولة.', 'warning');
     }
   };
 
@@ -950,7 +969,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage('طھظ… ط­ظپط¸ ط¥ط¹ط¯ط§ط¯ط§طھ ظ…ظˆط§ط¹ظٹط¯ ظˆط³ط§ط¹ط§طھ ط§ظ„ط¹ظ…ظ„ ط§ظ„طھظ„ظ‚ط§ط¦ظٹط© âڈ°', 'info');
+    showToastMessage('تم حفظ إعدادات مواعيد وساعات العمل التلقائية ⏰', 'info');
   };
 
   // Cart logic
@@ -969,7 +988,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       }
       return [...prev, newItem];
     });
-    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© "${newItem.name}" ط¥ظ„ظ‰ ط§ظ„ط³ظ„ط© ًں›’`, 'success');
+    showToastMessage(`تمت إضافة "${newItem.name}" إلى السلة 🛒`, 'success');
   };
 
   const removeFromCart = (index: number) => {
@@ -995,9 +1014,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updatePaymentGatewayConfig = async (newConfig: PaymentGatewayConfig) => {
     if (!supabase) return;
     const { error } = await supabase!.from('payment_gateway_config').upsert({ id: 'main', config: newConfig, updated_at: new Date().toISOString() });
-    if (error) { console.error('Error saving payment config:', error); showToastMessage('تعذر حفظ إعدادات الدفع.', 'warning'); return; }
+    if (error) { console.error('Error saving payment config:', error); showToastMessage('���� ��� ������� �����.', 'warning'); return; }
     setPaymentGatewayConfig(newConfig);
-    showToastMessage('تم حفظ إعدادات الدفع بنجاح.', 'success');
+    showToastMessage('�� ��� ������� ����� �����.', 'success');
   };
 
   // Place Order: Supabase is confirmed before local UI is changed.
@@ -1079,7 +1098,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ط§ظ„طµظ†ظپ "${newItem.name}" ط¥ظ„ظ‰ ط§ظ„ظ…ظ†ظٹظˆ`, 'success');
+    showToastMessage(`تمت إضافة الصنف "${newItem.name}" إلى المنيو`, 'success');
   };
 
   const updateMenuItem = (item: MenuItem) => {
@@ -1103,7 +1122,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`طھظ… طھط­ط¯ظٹط« ط¨ظٹط§ظ†ط§طھ ط§ظ„طµظ†ظپ "${item.name}"`, 'info');
+    showToastMessage(`تم تحديث بيانات الصنف "${item.name}"`, 'info');
   };
 
   const deleteMenuItem = (id: string) => {
@@ -1120,7 +1139,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    if (target) showToastMessage(`طھظ… ط­ط°ظپ ط§ظ„طµظ†ظپ "${target.name}"`, 'warning');
+    if (target) showToastMessage(`تم حذف الصنف "${target.name}"`, 'warning');
   };
 
   const toggleItemAvailability = (id: string) => {
@@ -1145,7 +1164,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(nextAvail ? 'طھظ… ط¥طھط§ط­ط© ط§ظ„طµظ†ظپ ًںں¢' : 'طھظ… ط¥ظٹظ‚ط§ظپ ط§ظ„طµظ†ظپ ظ…ط¤ظ‚طھط§ظ‹ ًں”´', nextAvail ? 'success' : 'warning');
+    showToastMessage(nextAvail ? 'تم إتاحة الصنف 🟢' : 'تم إيقاف الصنف مؤقتاً 🔴', nextAvail ? 'success' : 'warning');
   };
 
   // Staff Operations
@@ -1153,7 +1172,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Prevent duplicate usernames
     const exists = staff.some((s) => s.username.toLowerCase() === memberData.username.toLowerCase());
     if (exists) {
-      showToastMessage(`ط§ط³ظ… ط§ظ„ظ…ط³طھط®ط¯ظ… "${memberData.username}" ظ…ط³طھط®ط¯ظ… ط¨ط§ظ„ظپط¹ظ„طŒ ط§ط®طھط± ط§ط³ظ…ط§ظ‹ ط¢ط®ط±.`, 'warning');
+      showToastMessage(`اسم المستخدم "${memberData.username}" مستخدم بالفعل، اختر اسماً آخر.`, 'warning');
       return;
     }
 
@@ -1172,7 +1191,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`طھظ…طھ ط¥ط¶ط§ظپط© ط§ظ„ظ…ظˆط¸ظپ "${newMember.name}" ط¨ظ†ط¬ط§ط­`, 'success');
+    showToastMessage(`تمت إضافة الموظف "${newMember.name}" بنجاح`, 'success');
   };
 
   const updateStaff = (member: StaffMember) => {
@@ -1187,13 +1206,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage(`طھظ… طھط¹ط¯ظٹظ„ ط¨ظٹط§ظ†ط§طھ ط§ظ„ظ…ظˆط¸ظپ "${member.name}"`, 'info');
+    showToastMessage(`تم تعديل بيانات الموظف "${member.name}"`, 'info');
   };
 
   const deleteStaff = (id: string) => {
     const target = staff.find((s) => s.id === id);
     if (target?.username === 'admin' || id === 'staff-admin') {
-      showToastMessage('ظ„ط§ ظٹظ…ظƒظ† ط­ط°ظپ ط­ط³ط§ط¨ ط§ظ„ظ…ط¯ظٹط± ط§ظ„ط§ظپطھط±ط§ط¶ظٹ ط§ظ„ظ†ط¸ط§ظ…ظٹ ًں”’', 'warning');
+      showToastMessage('لا يمكن حذف حساب المدير الافتراضي النظامي 🔒', 'warning');
       return;
     }
 
@@ -1209,7 +1228,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage('طھظ… ط­ط°ظپ ط­ط³ط§ط¨ ط§ظ„ظ…ظˆط¸ظپ ط¨ظ†ط¬ط§ط­', 'warning');
+    showToastMessage('تم حذف حساب الموظف بنجاح', 'warning');
   };
 
   const resetDemoData = () => {
@@ -1231,7 +1250,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         });
     }
 
-    showToastMessage('طھظ… طھظپط±ظٹط؛ ظˆطھطµظپظٹط± ط¬ظ…ظٹط¹ ط§ظ„ط·ظ„ط¨ط§طھ ظˆط§ظ„ط¨ظٹط§ظ†ط§طھ ط¨ظ†ط¬ط§ط­ ًں§¼âœ¨', 'success');
+    showToastMessage('تم تفريغ وتصفير جميع الطلبات والبيانات بنجاح 🧼✨', 'success');
   };
 
   return (
@@ -1322,6 +1341,9 @@ export const useApp = () => {
   }
   return context;
 };
+
+
+
 
 
 
