@@ -319,7 +319,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Supabase Auth Listener
   useEffect(() => {
-    getCurrentUserId().then((id) => setUserId(id));
+    getCurrentUserId().then((id) => setUserId(id || ''));
 
     if (isSupabaseConfigured() && supabase) {
       supabase.auth.getUser().then(({ data }) => {
@@ -335,7 +335,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           setUserId(session.user.id);
         } else {
           setAuthUser(null);
-          getCurrentUserId().then((id) => setUserId(id));
+         getCurrentUserId().then((id) => setUserId(id ?? ''));
         }
       });
 
