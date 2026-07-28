@@ -621,12 +621,13 @@ export const AdminView: React.FC = () => {
                               onClick={() => {
                                 setEditingMenuItem(item);
                                 setItemForm({
-                                  name: item.name,
-                                  description: item.description,
-                                  price: item.price,
-                                  category: item.category,
-                                  image: item.image,
-                                  isAvailable: item.isAvailable,
+                                 name: item.name,
+                                 description: item.description,
+                                 price: item.price,
+                                 category: item.category,
+                                 image: item.image,
+                                 isAvailable: item.isAvailable,
+                                 customizationGroupIds: item.customizationGroupIds ?? [],
                                 });
                                 setIsAddMenuOpen(true);
                               }}

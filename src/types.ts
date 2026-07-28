@@ -134,7 +134,7 @@ export interface StaffMember {
   phone?: string;
   role: StaffRole;
   status: 'active' | 'inactive';
-  shift?: string;
+  shift?: 'الوردية الصباحية' | 'الوردية المسائية';
 }
 
 export interface BuffetLocation {
