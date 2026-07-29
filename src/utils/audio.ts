@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 /**
  * Web Audio API synth notification sound for kitchen order alerts.
  * Plays a pleasant double chime notification when a new order arrives.
@@ -59,7 +59,7 @@ export function playNewOrderSound() {
     console.warn('Audio chime playback failed:', err);
   }
 }
-=======
+
 // Web Audio API sound synthesizer for app notifications
 
 class SoundManager {
@@ -146,4 +146,4 @@ class SoundManager {
 }
 
 export const soundManager = new SoundManager();
->>>>>>> 62e890aef1fb83ee9f1991e93e2bad99a31f4427
+

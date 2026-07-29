@@ -1,5 +1,4 @@
-<<<<<<< HEAD
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   getAppData,
   subscribeToData,
@@ -30,7 +29,9 @@ import {
 import { subscribeSupabaseRealtimeEvents } from './services/supabase';
 import { getClientSessionId, getUserMode, setUserMode, UserMode } from './services/session';
 import { playNewOrderSound } from './utils/audio';
-import { AppData, Product, CartItem, CartItemAddon, OrderStatus } from './types';
+import { AppData, Product, CartItem, CartItemAddon, OrderStatus, Order } from './types';
+
+// Components
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
 import { LandingView } from './components/LandingView';
@@ -41,7 +42,6 @@ import { CartSheet } from './components/CartSheet';
 import { ProductDetailModal } from './components/ProductDetailModal';
 import { CloseBuffetModal } from './components/CloseBuffetModal';
 import { OrderSuccessModal } from './components/OrderSuccessModal';
-import { Order } from './types';
 
 export default function App() {
   const [data, setData] = useState<AppData>(getAppData());
@@ -105,7 +105,6 @@ export default function App() {
   // Handlers for switching user mode & strict RBAC Route Guards
   const handleSetActiveTab = (tab: 'menu' | 'orders' | 'manager') => {
     if (userModeState === 'staff') {
-      // Cashier is strictly restricted to 'orders' tab ONLY
       setActiveTab('orders');
       return;
     }
@@ -119,7 +118,6 @@ export default function App() {
   // Enforce role security: Route Guard strictly redirects non-authorized users
   useEffect(() => {
     if (userModeState === 'staff' && activeTab !== 'orders') {
-      // Cashier cannot visit menu or manager tabs
       setActiveTab('orders');
     } else if (userModeState === 'customer' && activeTab === 'manager') {
       setActiveTab('menu');
@@ -138,7 +136,6 @@ export default function App() {
     const cleanPin = pin.trim();
     const adminPin = data.settings.adminPin || '1234';
 
-    // 1. Check Admin/Manager PIN (كامل الصلاحيات)
     if (cleanPin === adminPin) {
       setUserMode('admin');
       setUserModeState('admin');
@@ -146,7 +143,6 @@ export default function App() {
       return true;
     }
 
-    // 2. Check Staff records in database by PIN and Role
     const matchingStaff = data.staff.find(s => s.pin && s.pin.trim() === cleanPin);
     if (matchingStaff) {
       const role = matchingStaff.role;
@@ -155,15 +151,13 @@ export default function App() {
         setUserModeState('admin');
         setActiveTab('manager');
       } else {
-        // Cashier role (كاشير / مجهز بوفيه / cashier)
         setUserMode('staff');
         setUserModeState('staff');
-        setActiveTab('orders'); // Cashier lands directly on orders screen ONLY
+        setActiveTab('orders');
       }
       return true;
     }
 
-    // 3. Fallback default Cashier PINs ('2222' or '0000')
     if (cleanPin === '2222' || cleanPin === '0000') {
       setUserMode('staff');
       setUserModeState('staff');
@@ -321,7 +315,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Cairo',sans-serif]">
-      {/* Mobile Frame Container */}
       <div className="w-full max-w-md mx-auto flex-1 flex flex-col relative min-h-screen border-x border-slate-900 shadow-2xl">
         {userModeState === 'landing' ? (
           <LandingView
@@ -331,7 +324,6 @@ export default function App() {
           />
         ) : (
           <>
-            {/* Header */}
             <Header
               settings={data.settings}
               activeTab={activeTab}
@@ -344,7 +336,6 @@ export default function App() {
               onGoToLanding={handleGoToLanding}
             />
 
-            {/* Main Content Area */}
             <main className="flex-1 overflow-y-auto">
               {activeTab === 'menu' && (
                 <MenuView
@@ -407,7 +398,6 @@ export default function App() {
               ) : null}
             </main>
 
-            {/* Bottom Touch Navigation Bar */}
             <BottomNav
               activeTab={activeTab}
               setActiveTab={handleSetActiveTab}
@@ -418,7 +408,6 @@ export default function App() {
           </>
         )}
 
-        {/* Cart Sheet Drawer */}
         <CartSheet
           isOpen={isCartOpen}
           onClose={() => setIsCartOpen(false)}
@@ -432,7 +421,6 @@ export default function App() {
           blockedReason={currentBlockedReason}
         />
 
-        {/* Product Detail Modal */}
         <ProductDetailModal
           product={selectedProductForDetail}
           currency={data.settings.currency}
@@ -440,7 +428,6 @@ export default function App() {
           onAddToCart={handleAddToCart}
         />
 
-        {/* Close Buffet Details Modal */}
         <CloseBuffetModal
           isOpen={isCloseModalOpen}
           onClose={() => setIsCloseModalOpen(false)}
@@ -449,7 +436,6 @@ export default function App() {
           currentReopenTime={data.settings.reopenTime}
         />
 
-        {/* Order Success Modal */}
         <OrderSuccessModal
           isOpen={isSuccessModalOpen}
           order={lastPlacedOrder}
@@ -463,116 +449,4 @@ export default function App() {
       </div>
     </div>
   );
-=======
-import React, { useState } from 'react';
-import { AppProvider, useApp } from './context/AppContext';
-import { Navbar } from './components/Navbar';
-import { WelcomeScreen } from './components/WelcomeScreen';
-import { CustomerView } from './components/CustomerView';
-import { EmployeeView } from './components/EmployeeView';
-import { AdminView } from './components/AdminView';
-import { CartDrawer } from './components/CartDrawer';
-import { CustomerOrdersTracker } from './components/CustomerOrdersTracker';
-import { Toast } from './components/Toast';
-import { PwaInstallPrompt } from './components/PwaInstallPrompt';
-import { AuthModal } from './components/AuthModal';
-import { SupabaseConfigModal } from './components/SupabaseConfigModal';
-
-const MainAppContent: React.FC = () => {
-  const { role, authUser, isAuthModalOpen, setIsAuthModalOpen, isConfigModalOpen, setIsConfigModalOpen } = useApp();
-  const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isOrdersHistoryOpen, setIsOrdersHistoryOpen] = useState(false);
-  const [lastPlacedOrderId, setLastPlacedOrderId] = useState<string | undefined>(undefined);
-
-  // If role is welcome, render the welcome screen landing page directly
-  if (role === 'welcome') {
-    return (
-      <>
-        <WelcomeScreen />
-        <Toast />
-        <PwaInstallPrompt />
-        <AuthModal
-          isOpen={isAuthModalOpen}
-          onClose={() => setIsAuthModalOpen(false)}
-          currentUser={authUser}
-        />
-        <SupabaseConfigModal
-          isOpen={isConfigModalOpen}
-          onClose={() => setIsConfigModalOpen(false)}
-        />
-      </>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-slate-50 font-['Tajawal',sans-serif] text-slate-900 flex flex-col selection:bg-amber-100 selection:text-amber-900">
-      
-      {/* Top Navbar */}
-      <Navbar
-        onOpenCart={() => setIsCartOpen(true)}
-        onOpenOrdersHistory={() => setIsOrdersHistoryOpen(true)}
-      />
-
-      {/* Active Role View */}
-      <div className="flex-1">
-        {role === 'customer' && <CustomerView />}
-        {role === 'employee' && <EmployeeView />}
-        {role === 'admin' && <AdminView />}
-      </div>
-
-      {/* Floating Global Cart Drawer */}
-      <CartDrawer
-        isOpen={isCartOpen}
-        onClose={() => setIsCartOpen(false)}
-        onOrderPlaced={(orderId) => {
-          setLastPlacedOrderId(orderId);
-          setIsOrdersHistoryOpen(true);
-        }}
-      />
-
-      {/* Global Customer Orders Tracker Drawer */}
-      <CustomerOrdersTracker
-        isOpen={isOrdersHistoryOpen}
-        onClose={() => setIsOrdersHistoryOpen(false)}
-        highlightOrderId={lastPlacedOrderId}
-      />
-
-      {/* Supabase Auth Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-        currentUser={authUser}
-      />
-
-      {/* Supabase Configuration & Schema Modal */}
-      <SupabaseConfigModal
-        isOpen={isConfigModalOpen}
-        onClose={() => setIsConfigModalOpen(false)}
-      />
-
-      {/* Toast Notification */}
-      <Toast />
-
-      {/* PWA Install Banner & Modal */}
-      <PwaInstallPrompt />
-
-      {/* Minimal Footer */}
-      <footer className="bg-slate-900 text-slate-400 py-6 px-4 text-center text-xs border-t border-slate-800">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>نظام طلبات بوفيه فادي الإلكتروني الذكي © {new Date().getFullYear()}</span>
-          <span className="text-emerald-400 font-bold">بوفيه فادي • خدمة سريعة بدون انتظار</span>
-        </div>
-      </footer>
-
-    </div>
-  );
-};
-
-export default function App() {
-  return (
-    <AppProvider>
-      <MainAppContent />
-    </AppProvider>
-  );
->>>>>>> 62e890aef1fb83ee9f1991e93e2bad99a31f4427
 }
