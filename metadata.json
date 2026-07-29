@@ -1,0 +1,6 @@
+{
+  "name": "بوفيه فادي - نظام الطلبات الذكي",
+  "description": "نظام إدارة البوفيه والطلبات المباشرة عبر الواتساب للزبائن والإدارة - بوفيه فادي",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

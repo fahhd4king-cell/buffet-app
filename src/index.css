@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  h1, h2, h3, h4, .font-tajawal {
+    font-family: 'Tajawal', 'Cairo', system-ui, sans-serif;
+  }
+
+  body {
+    background-color: #070B1A;
+    color: #FFFFFF;
+    overscroll-behavior-y: none;
+    user-select: none;
+  }
+
+  /* Custom gold scrollbars for list items */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(245, 179, 27, 0.25);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(245, 179, 27, 0.5);
+  }
+}
+
+/* Animations & Luxury Glow Effects */
+@keyframes slideUp {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes goldGlow {
+  0%, 100% { box-shadow: 0 0 20px rgba(245, 179, 27, 0.25); }
+  50% { box-shadow: 0 0 35px rgba(245, 179, 27, 0.5); }
+}
+
+.animate-slide-up {
+  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.gold-glow {
+  animation: goldGlow 3s infinite ease-in-out;
+}
+
+
