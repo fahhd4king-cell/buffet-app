@@ -1,6 +1,14 @@
 {
+<<<<<<< HEAD
   "name": "بوفيه فادي - نظام الطلبات الذكي",
   "description": "نظام إدارة البوفيه والطلبات المباشرة عبر الواتساب للزبائن والإدارة - بوفيه فادي",
   "requestFramePermissions": [],
+=======
+  "name": "بوفيه فادي",
+  "description": "تطبيق بوفيه فادي لطلب المشروبات والوجبات السريعة واستلامها بسرعة دون انتظار",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+>>>>>>> 62e890aef1fb83ee9f1991e93e2bad99a31f4427
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

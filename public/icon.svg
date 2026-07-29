@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="128" fill="#059669"/>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="none" stroke="#34d399" stroke-width="8" opacity="0.4"/>
+  <circle cx="256" cy="256" r="180" fill="#0f172a" opacity="0.2"/>
+  <text x="256" y="320" font-family="'Tajawal', 'Cairo', sans-serif" font-size="260" font-weight="900" fill="#ffffff" text-anchor="middle">ف</text>
+  <circle cx="360" cy="140" r="22" fill="#fbbf24"/>
+</svg>
