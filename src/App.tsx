@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { AppProvider } from './context/AppContext';
 import {
   getAppData,
   subscribeToData,
@@ -43,7 +44,7 @@ import { ProductDetailModal } from './components/ProductDetailModal';
 import { CloseBuffetModal } from './components/CloseBuffetModal';
 import { OrderSuccessModal } from './components/OrderSuccessModal';
 
-export default function App() {
+function MainAppContent() {
   const [data, setData] = useState<AppData>(getAppData());
   const [activeTab, setActiveTab] = useState<'menu' | 'orders' | 'manager'>('menu');
   const [userModeState, setUserModeState] = useState<UserMode>(getUserMode());
@@ -368,7 +369,7 @@ export default function App() {
               {activeTab === 'manager' && userModeState === 'admin' ? (
                 <ManagerView
                   data={data}
-                  onAddCategory={addCategory}
+                 onAddCategory={addCategory}
                   onDeleteCategory={deleteCategory}
                   onAddProduct={addProduct}
                   onUpdateProduct={updateProduct}
@@ -448,5 +449,13 @@ export default function App() {
         />
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AppProvider>
+      <MainAppContent />
+    </AppProvider>
   );
 }
